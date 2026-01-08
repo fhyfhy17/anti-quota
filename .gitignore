@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+
+# VS Code extension package
+*.vsix
+
+# OS files
+.DS_Store
+
+# Logs
+*.log
+
+# Test files
+test_*.js
