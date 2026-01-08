@@ -2,7 +2,7 @@
   "name": "anti-quota",
   "displayName": "Anti Quota",
   "description": "Antigravity 配额实时监控",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "fhyfhy17",
   "repository": {
     "type": "git",
@@ -24,14 +24,6 @@
       {
         "command": "anti-quota.refresh",
         "title": "Anti Quota: 刷新配额"
-      },
-      {
-        "command": "anti-quota.login",
-        "title": "Anti Quota: 登录 Google"
-      },
-      {
-        "command": "anti-quota.logout",
-        "title": "Anti Quota: 登出"
       }
     ],
     "configuration": {
