@@ -2,7 +2,7 @@
   "name": "anti-quota",
   "displayName": "Anti Quota",
   "description": "Antigravity 配额实时监控",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "fhyfhy17",
   "repository": {
     "type": "git",

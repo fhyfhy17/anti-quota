@@ -1,71 +1,78 @@
 # Anti Quota
 
-> Antigravity 配额实时监控 VS Code 插件
+> 📊 Antigravity 配额实时监控 - 精准、及时、可靠
 
-## 功能特点
+## ✨ 为什么选择 Anti Quota？
 
-- 🔄 **实时刷新**：默认每 10 秒自动刷新配额（可配置）
-- 📊 **状态栏显示**：在 VS Code 底部显示 Claude、Gemini Pro、Gemini Flash 的配额
-- 🖱️ **点击刷新**：点击状态栏配额即可手动刷新
-- 🔗 **复用登录**：自动使用 Antigravity IDE 的登录状态，无需单独登录
+**精准数据** - 直接调用 Google Cloud Code API，与 Antigravity IDE 使用完全相同的数据源，配额数据 100% 准确
 
-## 前置条件
+**实时刷新** - 默认每 10 秒自动刷新，告别手动查询，随时掌握配额动态
 
-**必须安装并登录 [Antigravity IDE](https://antigravity.dev/)**
+**零配置** - 自动复用 Antigravity IDE 登录状态，安装即用，无需额外登录
 
-本插件直接读取 Antigravity IDE 的登录凭证，无需额外认证。
+**轻量高效** - 仅在状态栏显示，不占用任何界面空间
 
-## 安装
+## 🎯 功能特点
 
-### 方式一：从 GitHub Release 下载
+| 特性 | 说明 |
+|------|------|
+| 🔄 **实时监控** | 10 秒自动刷新（可配置 1-60 秒） |
+| 📊 **状态栏显示** | 同时显示 Claude、Gemini Pro、Gemini Flash |
+| 🎨 **直观图标** | 颜色编码一眼看出配额状态 |
+| ⏱️ **重置提醒** | 悬停查看详细配额和重置时间 |
+| 🔗 **免登录** | 复用 Antigravity IDE 认证 |
 
-1. 前往 [Releases](https://github.com/fhyfhy17/anti-quota/releases) 下载最新的 `.vsix` 文件
-2. 在 VS Code 中按 `Cmd+Shift+P`，输入 `Extensions: Install from VSIX...`
-3. 选择下载的 `.vsix` 文件
+## 📦 安装
 
-### 方式二：命令行安装
+### 前置条件
 
-```bash
-code --install-extension anti-quota-x.x.x.vsix
-```
+> ⚠️ 需要已安装并登录 [Antigravity IDE](https://antigravity.dev/)
 
-## 使用
+### 从 GitHub Release 安装
 
-安装后插件会自动启动，在状态栏显示配额信息：
+1. 前往 [Releases](https://github.com/fhyfhy17/anti-quota/releases) 下载 `.vsix` 文件
+2. VS Code 中 `Cmd+Shift+P` → `Extensions: Install from VSIX...`
+3. 选择下载的文件，完成！
 
-```
+## 🚀 使用
+
+安装后自动启动，状态栏显示：
+
+```text
 🟢 Claude: 85%  🟡 G Pro: 45%  🟢 G Flash: 92%
 ```
 
-- **点击状态栏**：手动刷新配额
-- **悬停查看**：显示详细配额信息和重置时间
+- **点击** → 手动刷新
+- **悬停** → 查看详情和重置时间
 
-## 配置
-
-在 VS Code 设置中可以配置：
+## ⚙️ 配置
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `antiQuota.refreshInterval` | 10 | 自动刷新间隔（秒） |
 | `antiQuota.enabled` | true | 是否启用自动刷新 |
 
-## 状态图标
+## 🎨 状态图标
 
 | 图标 | 含义 |
 |------|------|
-| 🟢 | 配额 >= 70% |
-| 🟡 | 配额 30% - 70% |
-| 🟠 | 配额 < 30% |
+| 🟢 | 配额充足 (≥70%) |
+| 🟡 | 配额中等 (30%-70%) |
+| 🟠 | 配额不足 (<30%) |
 | 🔴 | 配额耗尽 |
 | ⚪ | 未获取到数据 |
 
-## 日志
+## 🔧 技术实现
 
-查看输出面板 `Anti Quota` 可以看到详细日志（`View` → `Output` → 选择 `Anti Quota`）。
+本插件借鉴 **Antigravity Tools** 的配额查询方式，直接调用 Google Cloud Code API (`cloudcode-pa.googleapis.com`)：
 
-## 技术说明
+- 使用与 Antigravity IDE 相同的 `fetchAvailableModels` API
+- 读取 Antigravity 本地存储的认证信息
+- 自动刷新 Access Token，保持长期有效
 
-插件直接调用 Google Cloud Code API (`cloudcode-pa.googleapis.com`) 获取配额信息，与 Antigravity IDE 使用相同的 API 和认证方式。
+## 📝 日志
+
+`View` → `Output` → 选择 `Anti Quota` 查看详细日志。
 
 ## License
 
