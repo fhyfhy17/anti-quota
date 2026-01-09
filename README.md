@@ -1,79 +1,175 @@
-# Anti Quota
+# Anti Quota - Antigravity 多账号配额管理
 
-> 📊 Antigravity 配额实时监控 - 精准、及时、可靠
+🚀 一个强大的 VS Code 扩展，用于管理 Antigravity 多账号和实时监控配额使用情况。
 
-## ✨ 为什么选择 Anti Quota？
+---
 
-**精准数据** - 直接调用 Google Cloud Code API，与 Antigravity IDE 使用完全相同的数据源，配额数据 100% 准确
+## ✨ 核心功能
 
-**实时刷新** - 默认每 10 秒自动刷新，告别手动查询，随时掌握配额动态
+### 🔐 多账号管理
 
-**零配置** - 自动复用 Antigravity IDE 登录状态，安装即用，无需额外登录
+- **添加账号**: 支持 refresh_token 导入和 Google OAuth 授权
+- **批量导入**: 一次性导入多个账号（支持 JSON 数组或换行分隔）
+- **自动导入**: 首次启动自动导入 Antigravity/Cursor/Windsurf 当前登录账号
 
-**轻量高效** - 仅在状态栏显示，不占用任何界面空间
+### ⚡ 无感切换
 
-## 🎯 功能特点
+- **无感切换**: 直接修改 IDE 数据库 Token，无需重启！
+- **重启切换**: 传统方式，关闭 IDE 后修改，需要手动重启
 
-| 特性 | 说明 |
-|------|------|
-| 🔄 **实时监控** | 10 秒自动刷新（可配置 1-60 秒） |
-| 📊 **状态栏显示** | 同时显示 Claude、Gemini Pro、Gemini Flash |
-| 🎨 **直观图标** | 颜色编码一眼看出配额状态 |
-| ⏱️ **重置提醒** | 悬停查看详细配额和重置时间 |
-| 🔗 **免登录** | 复用 Antigravity IDE 认证 |
+### 🤖 自动切换（亮点功能）
 
-## 📦 安装
+- 当前账号配额低于设定阈值时，自动切换到配额更高的账号
+- 可配置阈值（默认 10%）和检查间隔
+- 切换时可选择是否通知
 
-### 前置条件
+### 📊 实时监控
 
-> ⚠️ 需要已安装并登录 [Antigravity IDE](https://antigravity.dev/)
+- 状态栏显示三大模型（Claude、Gemini Pro、Gemini Flash）配额
+- 彩色进度条直观展示配额剩余
+- 自动刷新（可配置间隔）
 
-### 从 GitHub Release 安装
+---
 
-1. 前往 [Releases](https://github.com/fhyfhy17/anti-quota/releases) 下载 `.vsix` 文件
-2. VS Code 中 `Cmd+Shift+P` → `Extensions: Install from VSIX...`
-3. 选择下载的文件，完成！
+## 📸 功能展示
 
-## 🚀 使用
+### 侧边栏账号管理
 
-安装后自动启动，状态栏显示：
+- 账号卡片列表
+- 配额进度条
+- 一键切换、刷新、删除
 
-```text
-🟢 Claude: 85%  🟡 G Pro: 45%  🟢 G Flash: 92%
+### 状态栏
+
+```
+🟢 Claude: 85%  🟡 G Pro: 35%  🟢 G Flash: 92%
 ```
 
-- **点击** → 手动刷新
-- **悬停** → 查看详情和重置时间
+---
 
-## ⚙️ 配置
+## 🚀 快速开始
 
-| 配置项 | 默认值 | 说明 |
+### 首次使用
+
+插件会自动检测并导入当前 Antigravity/Cursor/Windsurf 编辑器中的账号。
+
+### 添加更多账号
+
+#### 方式一：Refresh Token
+
+1. 点击侧边栏 "+ Token" 标签
+2. 粘贴 refresh_token（支持多个，换行分隔）
+3. 点击"添加账号"
+
+#### 方式二：Google OAuth
+
+1. 点击侧边栏 "🔐 OAuth" 标签
+2. 点击"开始 Google 授权"
+3. 完成授权后，粘贴回调 URL
+4. 点击"确认"
+
+---
+
+## ⚙️ 配置选项
+
+在 VS Code 设置中搜索 `antiQuota`：
+
+| 设置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `antiQuota.refreshInterval` | 10 | 自动刷新间隔（秒） |
-| `antiQuota.enabled` | true | 是否启用自动刷新 |
+| `refreshInterval` | 30 | 配额刷新间隔（秒） |
+| `enabled` | true | 是否启用自动刷新 |
+| `autoSwitch.enabled` | true | 是否启用自动切换 |
+| `autoSwitch.threshold` | 10 | 自动切换阈值（%） |
+| `autoSwitch.checkInterval` | 60 | 自动切换检查间隔（秒） |
+| `autoSwitch.notifyOnSwitch` | true | 切换时显示通知 |
 
-## 🎨 状态图标
+---
 
-| 图标 | 含义 |
+## 📋 命令
+
+| 命令 | 说明 |
 |------|------|
-| 🟢 | 配额充足 (≥70%) |
-| 🟡 | 配额中等 (30%-70%) |
-| 🟠 | 配额不足 (<30%) |
-| 🔴 | 配额耗尽 |
-| ⚪ | 未获取到数据 |
+| `Anti Quota: 刷新当前账号配额` | 手动刷新当前账号配额 |
+| `Anti Quota: 刷新所有账号配额` | 刷新所有账号配额 |
+| `Anti Quota: 显示配额详情` | 打开配额详情面板 |
+| `Anti Quota: 打开账号管理` | 打开侧边栏账号管理 |
+| `Anti Quota: 添加账号` | 快速添加账号 |
+| `Anti Quota: 切换账号` | 切换到其他账号 |
+| `Anti Quota: 开关自动切换` | 切换自动切换功能 |
 
-## 🔧 技术实现
+---
 
-本插件借鉴 **Antigravity Tools** 的配额查询方式，直接调用 Google Cloud Code API (`cloudcode-pa.googleapis.com`)：
+## 🎨 配额颜色说明
 
-- 使用与 Antigravity IDE 相同的 `fetchAvailableModels` API
-- 读取 Antigravity 本地存储的认证信息
-- 自动刷新 Access Token，保持长期有效
+| 颜色 | 百分比 | 状态 |
+|------|--------|------|
+| 🟢 绿色 | >= 50% | 健康 |
+| 🟡 黄色 | 30% - 50% | 注意 |
+| 🟠 橙色 | 10% - 30% | 警告 |
+| 🔴 红色 | < 10% | 危险 |
 
-## 📝 日志
+---
 
-`View` → `Output` → 选择 `Anti Quota` 查看详细日志。
+## 💾 数据存储
 
-## License
+- 账号数据存储在 `~/.anti-quota/accounts.json`
+- 不会发送任何数据到第三方服务器
+- Token 安全存储在本地
+
+---
+
+## 🔧 支持的编辑器
+
+- Antigravity
+- Cursor
+- Windsurf
+- Kiro
+- 其他基于 VS Code 的编辑器
+
+---
+
+## ❓ 常见问题
+
+**Q: 无感切换后，编辑器右上角用户信息没变？**
+
+A: 这是正常的。无感切换只修改了底层 Token，UI 显示的用户信息需要重启才会更新。可通过状态栏配额变化确认切换成功。
+
+**Q: 自动切换没有生效？**
+
+A: 检查以下几点：
+
+1. 确保 `antiQuota.autoSwitch.enabled` 为 `true`
+2. 确保有多个账号且配额数据已获取
+3. 自动切换至少间隔 5 分钟，避免频繁切换
+
+**Q: 添加账号失败？**
+
+A: 确保 refresh_token 格式正确（以 `1//` 开头）。如果使用 OAuth，请确保在 [Google 权限管理](https://myaccount.google.com/permissions) 中撤销应用权限后重试。
+
+---
+
+## 📝 更新日志
+
+### v2.0.0
+
+- 🎉 全新多账号管理系统
+- ⚡ 无感切换功能
+- 🤖 配额自动切换功能
+- 🎨 侧边栏账号管理面板
+- 📊 配额详情面板
+
+### v1.0.2
+
+- 配额监控基础功能
+
+---
+
+## 📄 License
 
 MIT
+
+---
+
+## 🙏 致谢
+
+灵感来源于 [Antigravity-Assistant](https://github.com/carlxing521/Antigravity-Assistant)

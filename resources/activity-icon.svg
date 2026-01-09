@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+  <!-- 外圈表盘 -->
+  <path fill-rule="evenodd" d="M8 1.5a6.5 6.5 0 1 0 4.596 11.096.75.75 0 0 1 1.06 1.06A8.001 8.001 0 1 1 8 0V1.5z"/>
+  <!-- 指针基座 -->
+  <path d="M8 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/>
+  <!-- 指针（指向约 75% 位置，类似图片） -->
+  <path d="M9.1 7.1L12.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
