@@ -42,7 +42,7 @@ export interface ModelQuota {
 export interface AutoSwitchConfig {
     /** 是否启用自动切换 */
     enabled: boolean;
-    /** 配额阈值（低于此值触发切换） */
+    /** 配额阈值（低于此值触发切换） - 全球默认值 */
     threshold: number;
     /** 检查间隔（秒） */
     checkInterval: number;
@@ -52,6 +52,12 @@ export interface AutoSwitchConfig {
     notifyOnSwitch: boolean;
     /** 是否开启交互式确认切换 */
     interactive: boolean;
+    /** 针对不同模型的阈值设置 */
+    modelThresholds: {
+        claude: number;
+        'gemini-pro': number;
+        'gemini-flash': number;
+    };
 }
 
 /** 插件设置 */
@@ -71,11 +77,16 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     enabled: true,
     autoSwitch: {
         enabled: true,
-        threshold: 95,  // 已根据要求更新为 95%
-        checkInterval: 30,  // 从60秒缩短到30秒，更及时响应
+        threshold: 95,
+        checkInterval: 30,
         switchMode: 'seamless',
         notifyOnSwitch: true,
-        interactive: true  // 默认开启交互提示模式
+        interactive: true,
+        modelThresholds: {
+            claude: 0,
+            'gemini-pro': 0,
+            'gemini-flash': 0
+        }
     },
     displayModels: ['claude', 'gemini-pro', 'gemini-flash']
 };

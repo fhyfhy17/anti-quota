@@ -779,6 +779,45 @@ export function getBestAvailableAccount(excludeId?: string): Account | null {
     return available[0] || null;
 }
 
+/** 
+ * 获取特定模型的最佳备选账号
+ * - 必须未禁用、非 403
+ * - 该模型配额必须高于设定阈值
+ * - 该模型配额必须高于当前账号的配额
+ * - 如果有多个最高值相同的，则随机返回一个
+ */
+export function getBestAvailableAccountForModel(modelName: string, threshold: number, currentAccountPercentage: number, excludeId?: string): Account | null {
+    const accounts = listAccounts();
+
+    // 1. 筛选出可用的备选账号
+    const candidates = accounts.filter(a => {
+        if (a.id === excludeId || a.disabled || a.quota?.is_forbidden) return false;
+        const model = a.quota?.models.find(m => m.name === modelName);
+        if (!model) return false;
+
+        // 必须高于其设定阈值，且高于当前账号该模型的配额
+        return model.percentage > threshold && model.percentage > currentAccountPercentage;
+    });
+
+    if (candidates.length === 0) return null;
+
+    // 2. 找到该模型配额最高的账号们
+    let maxPercentage = -1;
+    candidates.forEach(a => {
+        const p = a.quota?.models.find(m => m.name === modelName)?.percentage ?? -1;
+        if (p > maxPercentage) maxPercentage = p;
+    });
+
+    const bestCandidates = candidates.filter(a => {
+        const p = a.quota?.models.find(m => m.name === modelName)?.percentage ?? -1;
+        return p === maxPercentage;
+    });
+
+    // 3. 从最高配额的账号中随机选一个
+    const randomIndex = Math.floor(Math.random() * bestCandidates.length);
+    return bestCandidates[randomIndex];
+}
+
 /** 获取账号最低配额 */
 export function getLowestQuota(account: Account): number {
     if (!account.quota?.models.length) return -1;

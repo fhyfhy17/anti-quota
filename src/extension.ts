@@ -28,8 +28,8 @@ let autoSwitchTimer: NodeJS.Timeout | undefined;
 // 当前状态
 let isRefreshing = false;
 let lastAutoSwitchTime = 0;
-// 记录用户拒绝切换的时间戳（key: targetAccountId, value: timestamp）
-let userRejectedSwitches: Map<string, number> = new Map();
+// 记录用户拒绝切换的模型（key: accountId:modelName, value: 1）
+let userRejectedModels: Set<string> = new Set();
 // 记录上次的配额值，用于检测显著下降
 let lastQuotaSnapshot: number = -1;
 
@@ -360,7 +360,6 @@ async function refreshCurrentAccountQuota(showLoading: boolean = false) {
 async function checkAndAutoSwitch() {
     const config = vscode.workspace.getConfiguration('antiQuota');
     const enabled = config.get<boolean>('autoSwitch.enabled', DEFAULT_SETTINGS.autoSwitch.enabled);
-    const threshold = config.get<number>('autoSwitch.threshold', DEFAULT_SETTINGS.autoSwitch.threshold);
     const interactive = config.get<boolean>('autoSwitch.interactive', DEFAULT_SETTINGS.autoSwitch.interactive);
     const notifyOnSwitch = config.get<boolean>('autoSwitch.notifyOnSwitch', DEFAULT_SETTINGS.autoSwitch.notifyOnSwitch);
 
@@ -384,92 +383,80 @@ async function checkAndAutoSwitch() {
         const current = await accountService.getCurrentAccount();
         if (!current?.quota?.models.length) return;
 
-        // 获取当前账号最低配额
-        const currentLowest = accountService.getLowestQuota(current);
+        // 获取分模型阈值
+        const modelThresholds = config.get<any>('autoSwitch.thresholds', { claude: 0, 'gemini-pro': 0, 'gemini-flash': 0 });
 
-        // 只有当配额低于阈值时才继续
-        if (currentLowest < threshold) {
-            log(`⚠️ 当前账号 ${current.email} 配额不足: ${currentLowest}% (低于阈值 ${threshold}%)`);
+        // 遍历当前账号的所有模型，检查是否需要切换
+        for (const model of current.quota.models) {
+            const thresholdValue = modelThresholds[model.name] || 0;
 
-            // 1. 尝试寻找更好的账号
-            const best = accountService.getBestAvailableAccount(current.id);
-            if (!best) {
-                log('没有可用的备选账号');
-                return;
-            }
-
-            const bestLowest = accountService.getLowestQuota(best);
-            log(`📊 最佳备选账号: ${best.email} (配额 ${bestLowest}%)`);
-
-            if (bestLowest <= currentLowest) {
-                log('现有账号已是最优，无需切换');
-                return;
-            }
-
-            // 检查用户是否在30分钟内拒绝过切换到这个账号
-            const now = Date.now();
-            const rejectedTime = userRejectedSwitches.get(best.id);
-            const REJECT_COOLDOWN = 30 * 60 * 1000; // 30分钟
-
-            if (rejectedTime && (now - rejectedTime) < REJECT_COOLDOWN) {
-                const remainingMinutes = Math.ceil((REJECT_COOLDOWN - (now - rejectedTime)) / (60 * 1000));
-                log(`用户已拒绝切换到 ${best.email}，${remainingMinutes} 分钟内不再提示`);
-                return;
-            }
-
-            // 清理过期的拒绝记录（超过30分钟）
-            for (const [accountId, timestamp] of userRejectedSwitches.entries()) {
-                if (now - timestamp >= REJECT_COOLDOWN) {
-                    userRejectedSwitches.delete(accountId);
+            // 如果该模型设定了阈值，且当前配额低于阈值
+            if (thresholdValue > 0 && model.percentage < thresholdValue) {
+                // 检查是否已经针对此账号的此模型点过“取消”
+                const rejectionKey = `${current.id}:${model.name}`;
+                if (userRejectedModels.has(rejectionKey)) {
+                    log(`用户已取消 ${current.email} 的 ${model.displayName} 切换提示，跳过检查`);
+                    continue;
                 }
-            }
 
-            // 2. 交互逻辑
-            if (interactive) {
-                const message = `⚠️ 配额不足: 当前账号 ${current.email} 仅剩 ${currentLowest}%。推荐切换到账号 ${best.email} (剩 ${bestLowest}%)。`;
-                const action = await vscode.window.showWarningMessage(message, { modal: true }, '立即切换', '30分钟内不再提醒');
+                log(`⚠️ 当前账号 ${current.email} 的模型 ${model.displayName} 配额不足: ${model.percentage}% (低于阈值 ${thresholdValue}%)`);
 
-                if (action === '30分钟内不再提醒') {
-                    userRejectedSwitches.set(best.id, now);
-                    log(`用户选择30分钟内不再提醒切换到 ${best.email}`);
+                // 尝试寻找更好的同类型账号
+                const best = accountService.getBestAvailableAccountForModel(model.name, thresholdValue, model.percentage, current.id);
+
+                if (!best) {
+                    log(`没有更优的同类型账号可用（全都不高于阈值或不高于当前账号）`);
+                    continue; // 检查下一个模型
+                }
+
+                const bestModelQuota = best.quota?.models.find(m => m.name === model.name)?.percentage ?? 0;
+                log(`📊 找到更优账号: ${best.email} (${model.displayName} 配额 ${bestModelQuota}%)`);
+
+                // 交互逻辑
+                if (interactive) {
+                    const message = `⚠️ 配额不足: 当前账号 ${current.email} 的 ${model.displayName} 仅剩 ${model.percentage}%。是否切换到更优账号 ${best.email} (${model.displayName} 为 ${bestModelQuota}%)？`;
+
+                    // 只有“切换”和“取消”按钮
+                    const action = await vscode.window.showWarningMessage(message, { modal: true }, '切换', '取消');
+
+                    if (action === '取消' || !action) {
+                        userRejectedModels.add(rejectionKey);
+                        log(`用户点击了取消，后续不再弹出 ${current.email} 的 ${model.displayName} 切换提示`);
+                        continue; // 检查下一个模型
+                    }
+                }
+
+                // 执行切换
+                log(`🚀 正在执行自动切换到 ${best.email}...`);
+                statusBarItem.text = `$(sync~spin) 自动切换中...`;
+
+                try {
+                    await accountService.switchAccount(best.id, 'seamless');
+                    multiWindowService.recordSwitch(best.id);
+
+                    log(`✅ 切换成功: ${best.email}`);
+
+                    if (notifyOnSwitch && !interactive) {
+                        vscode.window.showInformationMessage(`⚡ ${model.displayName} 配额低于 ${thresholdValue}%，已自动切换到 ${best.email} (${bestModelQuota}%)`);
+                    }
+
+                    updateStatusBar();
+                    provider.refresh();
+
+                    // 切换成功后退出整个检查流程，新账号会由下一次定时检查负责
+                    return;
+                } catch (switchError: any) {
+                    log(`❌ 切换失败: ${switchError.message}`);
+                    vscode.window.showErrorMessage(`自动切换失败: ${switchError.message}`);
+                    // 切换失败了，由于当前账号配额依然低，我们不必标记 userRejectedModels，下次还会尝试（可能针对另一个 best 账号）
                     return;
                 }
-
-                if (action !== '立即切换') {
-                    // 用户点了取消或关闭，也记录为拒绝
-                    userRejectedSwitches.set(best.id, now);
-                    log('用户拒绝了自动切换');
-                    return;
-                }
             }
-
-            // 3. 执行切换
-            log(`🚀 正在从 ${current.email} (${currentLowest}%) 切换到 ${best.email} (${bestLowest}%)...`);
-
-            statusBarItem.text = `$(sync~spin) 自动切换中...`;
-
-            try {
-                await accountService.switchAccount(best.id, 'seamless');
-                multiWindowService.recordSwitch(best.id);
-
-                log(`✅ 切换成功: ${best.email}`);
-
-                // 切换成功，清除该账号的拒绝记录
-                userRejectedSwitches.delete(best.id);
-
-                if (notifyOnSwitch && !interactive) { // 如果是交互模式，用户已经知道了，不需要再重复通知
-                    vscode.window.showInformationMessage(`⚡ 配额低于 ${threshold}%，已自动切换到 ${best.email} (${bestLowest}%)`);
-                }
-
-                updateStatusBar();
-                provider.refresh();
-            } catch (switchError: any) {
-                log(`❌ 切换失败: ${switchError.message}`);
-                vscode.window.showErrorMessage(`自动切换失败: ${switchError.message}`);
-            }
-        } else {
-            log(`✅ 当前账号 ${current.email} 配额充足: ${currentLowest}%`);
         }
+
+        const currentLowest = accountService.getLowestQuota(current);
+        log(`✅ 当前账号 ${current.email} 所有设定阈值的模型配额均充足 (最低: ${currentLowest}%)`);
+
     } catch (error) {
         log(`自动切换逻辑异常: ${error}`);
     }

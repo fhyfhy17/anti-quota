@@ -69,8 +69,8 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
                 case 'exportAccounts':
                     this._exportAccounts();
                     break;
-                case 'updateAutoSwitchThreshold':
-                    this._updateAutoSwitchThreshold(data.threshold);
+                case 'updateModelThreshold':
+                    this._updateModelThreshold(data.model, data.threshold);
                     break;
                 case 'updateAutoSwitchEnabled':
                     this._updateAutoSwitchEnabled(data.enabled);
@@ -87,7 +87,9 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
         // 获取当前设置
         const config = vscode.workspace.getConfiguration('antiQuota');
         const autoSwitchEnabled = config.get<boolean>('autoSwitch.enabled', true);
-        const autoSwitchThreshold = config.get<number>('autoSwitch.threshold', 95);
+        const claudeThreshold = config.get<number>('autoSwitch.thresholds.claude', 0);
+        const geminiProThreshold = config.get<number>('autoSwitch.thresholds.gemini-pro', 0);
+        const geminiFlashThreshold = config.get<number>('autoSwitch.thresholds.gemini-flash', 0);
 
         this._view?.webview.postMessage({
             type: 'accounts',
@@ -95,7 +97,11 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
             currentId: current?.id,
             settings: {
                 autoSwitchEnabled,
-                autoSwitchThreshold
+                modelThresholds: {
+                    claude: claudeThreshold,
+                    'gemini-pro': geminiProThreshold,
+                    'gemini-flash': geminiFlashThreshold
+                }
             }
         });
     }
@@ -286,11 +292,11 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
         vscode.window.showInformationMessage(`已复制 ${exported.length} 个账号到剪贴板`);
     }
 
-    /** 更新自动切换阈值 */
-    private _updateAutoSwitchThreshold(threshold: number) {
+    /** 更新指定模型的自动切换阈值 */
+    private _updateModelThreshold(model: string, threshold: number) {
         const config = vscode.workspace.getConfiguration('antiQuota');
-        config.update('autoSwitch.threshold', threshold, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage(`自动切换阈值已设置为 ${threshold}%`);
+        config.update(`autoSwitch.thresholds.${model}`, threshold, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(`${model} 阈值已设置为 ${threshold}%`);
     }
 
     /** 更新自动切换启用状态 */
@@ -576,27 +582,48 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
             color: var(--vscode-descriptionForeground);
         }
 
-        .quota-list {
+        .account-stats {
             display: flex;
-            flex-wrap: wrap;
-            gap: 6px 12px;
-            margin-top: 4px;
+            gap: 12px;
+            margin-bottom: 12px;
+            padding: 6px 8px;
+            background: var(--vscode-editor-background);
+            border-radius: 4px;
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            border: 1px solid var(--vscode-widget-border);
+        }
+
+        .stat-item b {
+            color: var(--vscode-foreground);
+            margin-left: 2px;
+        }
+
+        .quota-list {
+            display: grid;
+            grid-template-columns: auto auto 1fr;
+            gap: 4px 12px;
+            margin-top: 6px;
         }
 
         .quota-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 10px;
+            display: contents;
         }
 
         .quota-label {
             color: var(--vscode-descriptionForeground);
+            font-size: 10px;
+            white-space: nowrap;
         }
 
         .quota-value {
             font-weight: 600;
+            font-size: 10px;
+            text-align: left;
+            min-width: 35px;
         }
+
+
 
         .quota-value.high { color: var(--vscode-charts-green); }
         .quota-value.medium { color: var(--vscode-charts-yellow); }
@@ -816,6 +843,11 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
             </div>
         </div>
 
+        <div id="account-stats-container" class="account-stats">
+            <div class="stat-item">总账号: <b id="stat-total">0</b></div>
+            <div class="stat-item">当前激活: <b id="stat-active">0</b></div>
+        </div>
+
         <div id="accounts-container" class="accounts-list">
             <div class="empty-state">
                 <div class="icon"><span class="flat-icon large"><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8l8 5 8-5v10zm-8-7L4 6h16l-8 5z"/></svg></span></div>
@@ -838,18 +870,46 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
                     <span class="toggle-slider"></span>
                 </label>
             </div>
+            <div class="setting-row" style="margin-top: 12px; border-top: 1px solid var(--vscode-widget-border); padding-top: 12px;">
+                <div class="setting-label" style="font-weight: 600;">分模型详细设置 (0% 为不检查)</div>
+            </div>
+
+            <!-- Claude -->
             <div class="setting-row">
                 <div class="setting-label">
-                    阈值（配额低于此值时触发）
-                    <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 2px;">
-                        当任意模型的配额 < <span id="threshold-display">95</span>% 时提示切换
-                    </div>
+                    Claude 阈值: <span id="display-claude">0</span>%
                 </div>
             </div>
             <div class="setting-row">
-                <input type="range" id="auto-switch-threshold" min="1" max="100" value="95" 
-                       oninput="updateThresholdDisplay(this.value)" 
-                       onchange="updateAutoSwitchThreshold(this.value)"
+                <input type="range" id="threshold-claude" min="0" max="100" value="0" 
+                       oninput="updateModelThresholdDisplay('claude', this.value)" 
+                       onchange="updateModelThreshold('claude', this.value)"
+                       style="width: 100%; margin: 0;">
+            </div>
+
+            <!-- G Pro -->
+            <div class="setting-row" style="margin-top: 8px;">
+                <div class="setting-label">
+                    Gemini Pro 阈值: <span id="display-gemini-pro">0</span>%
+                </div>
+            </div>
+            <div class="setting-row">
+                <input type="range" id="threshold-gemini-pro" min="0" max="100" value="0" 
+                       oninput="updateModelThresholdDisplay('gemini-pro', this.value)" 
+                       onchange="updateModelThreshold('gemini-pro', this.value)"
+                       style="width: 100%; margin: 0;">
+            </div>
+
+            <!-- G Flash -->
+            <div class="setting-row" style="margin-top: 8px;">
+                <div class="setting-label">
+                    Gemini Flash 阈值: <span id="display-gemini-flash">0</span>%
+                </div>
+            </div>
+            <div class="setting-row">
+                <input type="range" id="threshold-gemini-flash" min="0" max="100" value="0" 
+                       oninput="updateModelThresholdDisplay('gemini-flash', this.value)" 
+                       onchange="updateModelThreshold('gemini-flash', this.value)"
                        style="width: 100%; margin: 0;">
             </div>
         </div>
@@ -876,12 +936,17 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
                     // 更新设置UI
                     if (data.settings) {
                         const enabledCheckbox = document.getElementById('auto-switch-enabled');
-                        const thresholdSlider = document.getElementById('auto-switch-threshold');
-                        const thresholdDisplay = document.getElementById('threshold-display');
-                        
                         if (enabledCheckbox) enabledCheckbox.checked = data.settings.autoSwitchEnabled;
-                        if (thresholdSlider) thresholdSlider.value = data.settings.autoSwitchThreshold;
-                        if (thresholdDisplay) thresholdDisplay.textContent = data.settings.autoSwitchThreshold;
+
+                        if (data.settings.modelThresholds) {
+                            const mt = data.settings.modelThresholds;
+                            ['claude', 'gemini-pro', 'gemini-flash'].forEach(model => {
+                                const input = document.getElementById('threshold-' + model);
+                                const display = document.getElementById('display-' + model);
+                                if (input) input.value = mt[model] || 0;
+                                if (display) display.textContent = mt[model] || 0;
+                            });
+                        }
                     }
                     
                     renderAccounts();
@@ -992,12 +1057,14 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ type: 'toggleDisabled', accountId: id });
         }
 
-        function updateThresholdDisplay(value) {
-            document.getElementById('threshold-display').textContent = value;
+        function updateModelThreshold(model, value) {
+            const val = parseInt(value);
+            document.getElementById('display-' + model).textContent = val;
+            vscode.postMessage({ type: 'updateModelThreshold', model, threshold: val });
         }
 
-        function updateAutoSwitchThreshold(value) {
-            vscode.postMessage({ type: 'updateAutoSwitchThreshold', threshold: parseInt(value) });
+        function updateModelThresholdDisplay(model, value) {
+            document.getElementById('display-' + model).textContent = value;
         }
 
         function updateAutoSwitchEnabled(enabled) {
@@ -1028,6 +1095,9 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
         function renderAccounts() {
             const container = document.getElementById('accounts-container');
             
+            // 更新统计信息
+            document.getElementById('stat-total').textContent = accounts.length;
+            document.getElementById('stat-active').textContent = accounts.filter(a => !a.disabled).length;
             if (accounts.length === 0) {
                 container.innerHTML = \`
                     <div class="empty-state">
@@ -1064,14 +1134,11 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
                     );
                     quotaHtml = '<div class="quota-list">' + sortedModels.map(m => {
                         const resetTime = formatResetTime(m.reset_time);
-                        const resetHtml = resetTime ? \`<span class="reset-time">R: \${resetTime}</span>\` : '';
-                        return \`
-                            <div class="quota-item">
-                                <span class="quota-label">\${m.displayName}:</span>
-                                <span class="quota-value \${getQuotaClass(m.percentage)}">\${m.percentage}%</span>
-                                \${resetHtml}
-                            </div>
-                        \`;
+                        return '<div class="quota-item">' +
+                            '<span class="quota-label">' + m.displayName + ':</span>' +
+                            '<span class="quota-value ' + getQuotaClass(m.percentage) + '">' + m.percentage + '%</span>' +
+                            '<span class="reset-time">' + (resetTime ? 'R: ' + resetTime : '') + '</span>' +
+                            '</div>';
                     }).join('') + '</div>';
                 } else if (account.quota?.is_forbidden) {
                     quotaHtml = '<div class="quota-list"><span style="color: var(--vscode-charts-red); font-size: 10px;">无权限</span></div>';

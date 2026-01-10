@@ -2,7 +2,7 @@
   "name": "anti-quota",
   "displayName": "Anti Quota",
   "description": "Antigravity 多账号配额管理 - 实时刷新、无感切换、自动切换",
-  "version": "2.8.3",
+  "version": "2.8.9",
   "publisher": "fhyfhy17",
   "icon": "resources/icon.png",
   "repository": {
@@ -106,9 +106,30 @@
         "antiQuota.autoSwitch.threshold": {
           "type": "number",
           "default": 95,
-          "minimum": 1,
+          "minimum": 0,
           "maximum": 100,
-          "description": "自动切换触发阈值（配额百分比）"
+          "description": "自动切换触发阈值（全局，已废弃，建议使用分模型设置）"
+        },
+        "antiQuota.autoSwitch.thresholds.claude": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Claude 模型触发阈值（百分比）"
+        },
+        "antiQuota.autoSwitch.thresholds.gemini-pro": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Gemini Pro 模型触发阈值（百分比）"
+        },
+        "antiQuota.autoSwitch.thresholds.gemini-flash": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Gemini Flash 模型触发阈值（百分比）"
         },
         "antiQuota.autoSwitch.checkInterval": {
           "type": "number",
