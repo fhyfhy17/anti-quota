@@ -6,5 +6,6 @@ src/**
 *.md
 *.vsix
 node_modules/**
+!node_modules/sql.js/**
 test_*.js
 tsconfig.json

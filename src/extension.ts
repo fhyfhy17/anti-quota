@@ -28,6 +28,10 @@ let autoSwitchTimer: NodeJS.Timeout | undefined;
 // 当前状态
 let isRefreshing = false;
 let lastAutoSwitchTime = 0;
+// 记录用户拒绝切换的时间戳（key: targetAccountId, value: timestamp）
+let userRejectedSwitches: Map<string, number> = new Map();
+// 记录上次的配额值，用于检测显著下降
+let lastQuotaSnapshot: number = -1;
 
 // 缓存的配额数据（用于 1% 阈值防跳动）
 interface CachedQuota {
@@ -39,9 +43,17 @@ let cachedQuotas: CachedQuota[] = [];
 
 // ============ 激活 ============
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Anti Quota');
     log('🚀 Anti Quota 插件已激活');
+
+    // 自动解锁数据库权限（针对 V2.2.0 物理锁定方案的自我修复）
+    try {
+        const antigravityService = await import('./services/antigravityService');
+        antigravityService.setDbFileWritable(true);
+    } catch (e) {
+        log(`解锁数据库失败: ${e}`);
+    }
 
     // 创建配额状态栏（点击打开账号管理）
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
@@ -231,21 +243,11 @@ function registerCommands(context: vscode.ExtensionContext) {
                     try {
                         await accountService.switchAccount(selected.account.id, mode.mode);
 
-                        if (mode.mode === 'seamless') {
-                            // 【修复】无感切换后重新加载窗口,确保 IDE 读取最新账号信息
-                            // 否则过一会儿 IDE 会把旧账号信息写回数据库,导致切换失效
-                            vscode.window.showInformationMessage(
-                                `已无感切换到 ${selected.account.email},窗口即将重新加载...`
-                            );
-                            // 延迟重新加载,让消息有时间显示
-                            setTimeout(() => {
-                                vscode.commands.executeCommand('workbench.action.reloadWindow');
-                            }, 1000);
-                        } else {
-                            vscode.window.showInformationMessage(
-                                `已切换到 ${selected.account.email}，请重启 IDE`
-                            );
-                        }
+                        vscode.window.showInformationMessage(
+                            mode.mode === 'seamless'
+                                ? `⚡ 已无感切换到 ${selected.account.email}`
+                                : `已切换到 ${selected.account.email}，请手动重启 Antigravity IDE`
+                        );
 
                         provider.refresh();
                         updateStatusBar();
@@ -264,6 +266,14 @@ function registerCommands(context: vscode.ExtensionContext) {
             const current = config.get<boolean>('autoSwitch.enabled', true);
             config.update('autoSwitch.enabled', !current, vscode.ConfigurationTarget.Global);
             vscode.window.showInformationMessage(`自动切换已${!current ? '启用' : '禁用'}`);
+        })
+    );
+
+    // 手动触发自动切换检查（用于测试）
+    context.subscriptions.push(
+        vscode.commands.registerCommand('anti-quota.checkAndSwitch', async () => {
+            log('手动触发自动切换检查...');
+            await checkAndAutoSwitch();
         })
     );
 }
@@ -312,6 +322,26 @@ async function refreshCurrentAccountQuota(showLoading: boolean = false) {
         const current = await accountService.getCurrentAccount();
         if (current) {
             await accountService.fetchAccountQuota(current.id);
+
+            // 获取刷新后的最新配额
+            const updatedAccount = await accountService.getCurrentAccount();
+            const currentLowest = updatedAccount ? accountService.getLowestQuota(updatedAccount) : -1;
+
+            // 检测配额是否显著下降（≥5%）
+            if (lastQuotaSnapshot !== -1 && currentLowest !== -1) {
+                const quotaDrop = lastQuotaSnapshot - currentLowest;
+                if (quotaDrop >= 5) {
+                    log(`⚡ 检测到配额显著下降: ${lastQuotaSnapshot}% → ${currentLowest}% (下降 ${quotaDrop}%)，立即触发自动切换检查`);
+                    // 立即触发检查，不等待定时器
+                    setTimeout(() => checkAndAutoSwitch(), 100);
+                }
+            }
+
+            // 更新配额快照
+            if (currentLowest !== -1) {
+                lastQuotaSnapshot = currentLowest;
+            }
+
             updateStatusBar();
             log(`配额刷新成功: ${current.email}`);
         } else {
@@ -329,74 +359,119 @@ async function refreshCurrentAccountQuota(showLoading: boolean = false) {
 
 async function checkAndAutoSwitch() {
     const config = vscode.workspace.getConfiguration('antiQuota');
-    const enabled = config.get<boolean>('autoSwitch.enabled', true);
-    const threshold = config.get<number>('autoSwitch.threshold', 10);
-    const notifyOnSwitch = config.get<boolean>('autoSwitch.notifyOnSwitch', true);
+    const enabled = config.get<boolean>('autoSwitch.enabled', DEFAULT_SETTINGS.autoSwitch.enabled);
+    const threshold = config.get<number>('autoSwitch.threshold', DEFAULT_SETTINGS.autoSwitch.threshold);
+    const interactive = config.get<boolean>('autoSwitch.interactive', DEFAULT_SETTINGS.autoSwitch.interactive);
+    const notifyOnSwitch = config.get<boolean>('autoSwitch.notifyOnSwitch', DEFAULT_SETTINGS.autoSwitch.notifyOnSwitch);
 
     if (!enabled) return;
 
-    // 多窗口环境下，只有主窗口可以执行自动切换
+    // 多窗口环境下，只有主窗口可以执行自动切换控制逻辑
     if (!multiWindowService.canAutoSwitch()) {
-        log('非主窗口或切换间隔不足，跳过自动切换检查');
         return;
     }
 
-    const now = Date.now();
-
     try {
+        // ✨ 先静默刷新所有账号的配额，确保数据是最新的
+        log('🔄 自动切换检查：正在刷新所有账号配额...');
+        const refreshResult = await accountService.refreshAllQuotas();
+        log(`✅ 配额刷新完成: ${refreshResult.success} 成功, ${refreshResult.failed} 失败`);
+
+        // 刷新后更新 UI
+        updateStatusBar();
+        provider.refresh();
+
         const current = await accountService.getCurrentAccount();
         if (!current?.quota?.models.length) return;
 
         // 获取当前账号最低配额
         const currentLowest = accountService.getLowestQuota(current);
-        log(`当前账号 ${current.email} 最低配额: ${currentLowest}%`);
 
+        // 只有当配额低于阈值时才继续
         if (currentLowest < threshold) {
-            log(`配额 ${currentLowest}% 低于阈值 ${threshold}%，寻找更好的账号...`);
+            log(`⚠️ 当前账号 ${current.email} 配额不足: ${currentLowest}% (低于阈值 ${threshold}%)`);
 
-            // 刷新所有账号配额
-            await accountService.refreshAllQuotas();
-
-            // 找到最佳账号
+            // 1. 尝试寻找更好的账号
             const best = accountService.getBestAvailableAccount(current.id);
-            if (best) {
-                const bestLowest = accountService.getLowestQuota(best);
-                log(`找到备选账号 ${best.email}，最低配额: ${bestLowest}%`);
-
-                if (bestLowest > currentLowest) {
-                    // 执行切换
-                    await accountService.switchAccount(best.id, 'seamless');
-                    multiWindowService.recordSwitch(best.id);
-
-                    log(`✅ 自动切换成功: ${current.email} → ${best.email}`);
-
-                    if (notifyOnSwitch) {
-                        vscode.window.showInformationMessage(
-                            `⚡ 配额不足，已自动切换到 ${best.email}，窗口即将重新加载...`,
-                            '查看详情'
-                        ).then(action => {
-                            if (action === '查看详情') {
-                                vscode.commands.executeCommand('anti-quota.showQuotaDetails');
-                            }
-                        });
-                    }
-
-                    updateStatusBar();
-                    provider.refresh();
-
-                    // 【修复】自动切换后也需要重新加载窗口
-                    setTimeout(() => {
-                        vscode.commands.executeCommand('workbench.action.reloadWindow');
-                    }, notifyOnSwitch ? 2000 : 1000);
-                } else {
-                    log('没有找到配额更高的账号');
-                }
-            } else {
+            if (!best) {
                 log('没有可用的备选账号');
+                return;
             }
+
+            const bestLowest = accountService.getLowestQuota(best);
+            log(`📊 最佳备选账号: ${best.email} (配额 ${bestLowest}%)`);
+
+            if (bestLowest <= currentLowest) {
+                log('现有账号已是最优，无需切换');
+                return;
+            }
+
+            // 检查用户是否在30分钟内拒绝过切换到这个账号
+            const now = Date.now();
+            const rejectedTime = userRejectedSwitches.get(best.id);
+            const REJECT_COOLDOWN = 30 * 60 * 1000; // 30分钟
+
+            if (rejectedTime && (now - rejectedTime) < REJECT_COOLDOWN) {
+                const remainingMinutes = Math.ceil((REJECT_COOLDOWN - (now - rejectedTime)) / (60 * 1000));
+                log(`用户已拒绝切换到 ${best.email}，${remainingMinutes} 分钟内不再提示`);
+                return;
+            }
+
+            // 清理过期的拒绝记录（超过30分钟）
+            for (const [accountId, timestamp] of userRejectedSwitches.entries()) {
+                if (now - timestamp >= REJECT_COOLDOWN) {
+                    userRejectedSwitches.delete(accountId);
+                }
+            }
+
+            // 2. 交互逻辑
+            if (interactive) {
+                const message = `⚠️ 配额不足: 当前账号 ${current.email} 仅剩 ${currentLowest}%。推荐切换到账号 ${best.email} (剩 ${bestLowest}%)。`;
+                const action = await vscode.window.showWarningMessage(message, { modal: true }, '立即切换', '30分钟内不再提醒');
+
+                if (action === '30分钟内不再提醒') {
+                    userRejectedSwitches.set(best.id, now);
+                    log(`用户选择30分钟内不再提醒切换到 ${best.email}`);
+                    return;
+                }
+
+                if (action !== '立即切换') {
+                    // 用户点了取消或关闭，也记录为拒绝
+                    userRejectedSwitches.set(best.id, now);
+                    log('用户拒绝了自动切换');
+                    return;
+                }
+            }
+
+            // 3. 执行切换
+            log(`🚀 正在从 ${current.email} (${currentLowest}%) 切换到 ${best.email} (${bestLowest}%)...`);
+
+            statusBarItem.text = `$(sync~spin) 自动切换中...`;
+
+            try {
+                await accountService.switchAccount(best.id, 'seamless');
+                multiWindowService.recordSwitch(best.id);
+
+                log(`✅ 切换成功: ${best.email}`);
+
+                // 切换成功，清除该账号的拒绝记录
+                userRejectedSwitches.delete(best.id);
+
+                if (notifyOnSwitch && !interactive) { // 如果是交互模式，用户已经知道了，不需要再重复通知
+                    vscode.window.showInformationMessage(`⚡ 配额低于 ${threshold}%，已自动切换到 ${best.email} (${bestLowest}%)`);
+                }
+
+                updateStatusBar();
+                provider.refresh();
+            } catch (switchError: any) {
+                log(`❌ 切换失败: ${switchError.message}`);
+                vscode.window.showErrorMessage(`自动切换失败: ${switchError.message}`);
+            }
+        } else {
+            log(`✅ 当前账号 ${current.email} 配额充足: ${currentLowest}%`);
         }
     } catch (error) {
-        log(`自动切换检查失败: ${error}`);
+        log(`自动切换逻辑异常: ${error}`);
     }
 }
 

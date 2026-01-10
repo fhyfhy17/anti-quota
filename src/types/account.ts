@@ -50,6 +50,8 @@ export interface AutoSwitchConfig {
     switchMode: 'seamless' | 'full';
     /** 切换时是否通知 */
     notifyOnSwitch: boolean;
+    /** 是否开启交互式确认切换 */
+    interactive: boolean;
 }
 
 /** 插件设置 */
@@ -69,10 +71,11 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     enabled: true,
     autoSwitch: {
         enabled: true,
-        threshold: 10,
-        checkInterval: 60,
+        threshold: 95,  // 已根据要求更新为 95%
+        checkInterval: 30,  // 从60秒缩短到30秒，更及时响应
         switchMode: 'seamless',
-        notifyOnSwitch: true
+        notifyOnSwitch: true,
+        interactive: true  // 默认开启交互提示模式
     },
     displayModels: ['claude', 'gemini-pro', 'gemini-flash']
 };

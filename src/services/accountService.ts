@@ -12,6 +12,7 @@ import * as oauthService from './oauthService';
 import * as antigravityService from './antigravityService';
 import * as multiWindowService from './multiWindowService';
 import * as oauthCallbackServer from './oauthCallbackServer';
+import * as vscode from 'vscode';
 
 // Google Cloud Code API
 const CLOUD_CODE_API_BASE = 'cloudcode-pa.googleapis.com';
@@ -508,33 +509,66 @@ export async function switchAccount(accountId: string, mode: 'seamless' | 'full'
         throw new Error('账号不存在');
     }
 
-    // 确保 Token 有效
-    const now = Math.floor(Date.now() / 1000);
-    if (!account.token.access_token || account.token.expiry_timestamp < now + 300) {
-        try {
-            const tokenRes = await oauthService.refreshAccessToken(account.token.refresh_token);
-            account.token.access_token = tokenRes.access_token;
-            account.token.expires_in = tokenRes.expires_in;
-            account.token.expiry_timestamp = now + tokenRes.expires_in;
-            saveAccounts(accounts);
-        } catch (error) {
-            throw new Error(`Token 刷新失败: ${error}`);
-        }
-    }
-
     // 切换
     if (mode === 'full') {
+        // FULL 模式需要依赖 token 注入，必须确保 Token 有效
+        const now = Math.floor(Date.now() / 1000);
+        if (!account.token.access_token || account.token.expiry_timestamp < now + 300) {
+            try {
+                const tokenRes = await oauthService.refreshAccessToken(account.token.refresh_token);
+                account.token.access_token = tokenRes.access_token;
+                account.token.expires_in = tokenRes.expires_in;
+                account.token.expiry_timestamp = now + tokenRes.expires_in;
+                saveAccounts(accounts);
+            } catch (error) {
+                throw new Error(`Token 刷新失败: ${error}`);
+            }
+        }
+
+        // 完整切换模式：修改配置文件 + 手动重启
+        console.log('[Account] Using FULL switch mode');
         await antigravityService.switchAccountFull(
             account.token.access_token,
             account.token.refresh_token,
-            account.token.expiry_timestamp
+            account.token.expiry_timestamp,
+            account.email
         );
     } else {
-        await antigravityService.switchAccountSeamless(
-            account.token.access_token,
-            account.token.refresh_token,
-            account.token.expiry_timestamp
-        );
+        // 直接切换模式（参考 Antigravity-Manager）
+        // 1. 关闭 Antigravity
+        // 2. 注入 Token 到数据库
+        // 3. 重启 Antigravity
+
+        console.log('[Account] Using DIRECT switch mode (Close -> Inject -> Restart)');
+
+        try {
+            // 动态导入直接切换服务
+            const { DirectSwitchService } = await import('./directSwitchService');
+            console.log('[Account] ✓ DirectSwitchService loaded');
+
+            const directService = new DirectSwitchService();
+            console.log('[Account] Calling directService.switchAccount...');
+
+            const result = await directService.switchAccount(account);
+            console.log('[Account] Direct switch result:', JSON.stringify(result));
+
+            if (result.success) {
+                // 切换成功，更新 last_used 并返回
+                console.log('[Account] ✓ Direct switch SUCCESS!');
+                account.last_used = Math.floor(Date.now() / 1000);
+                saveAccounts(accounts);
+                return;
+            }
+
+            // 切换失败，抛出错误
+            console.error('[Account] ❌ Direct switch FAILED:', result.error);
+            throw new Error(`账号切换失败: ${result.error}`);
+
+        } catch (error: any) {
+            // 记录并抛出
+            console.error('[Account] ❌ Direct switch error:', error);
+            throw new Error(`账号切换异常: ${error.message}`);
+        }
     }
 
     // 更新 last_used
