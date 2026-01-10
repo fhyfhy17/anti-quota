@@ -416,12 +416,12 @@ async function checkAndAutoSwitch() {
                 if (interactive) {
                     const message = `⚠️ 配额不足: 当前账号 ${current.email} 的 ${model.displayName} 仅剩 ${model.percentage}%。是否切换到更优账号 ${best.email} (${model.displayName} 为 ${bestModelQuota}%)？`;
 
-                    // 只有“切换”和“取消”按钮
-                    const action = await vscode.window.showWarningMessage(message, { modal: true }, '切换', '取消');
+                    // Modal 对话框自带取消按钮，只需传"切换"
+                    const action = await vscode.window.showWarningMessage(message, { modal: true }, '切换');
 
-                    if (action === '取消' || !action) {
+                    if (!action) {
                         userRejectedModels.add(rejectionKey);
-                        log(`用户点击了取消，后续不再弹出 ${current.email} 的 ${model.displayName} 切换提示`);
+                        log(`用户取消切换，后续不再弹出 ${current.email} 的 ${model.displayName} 切换提示`);
                         continue; // 检查下一个模型
                     }
                 }

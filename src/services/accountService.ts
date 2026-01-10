@@ -199,7 +199,9 @@ export async function addAccountByToken(refreshToken: string): Promise<Account> 
     // 检查 refresh_token 是否已存在
     const existingByToken = accounts.find(a => a.token.refresh_token === refreshToken);
     if (existingByToken) {
-        throw new Error('该账号已存在');
+        // 静默返回现有账号（批量导入时跳过重复）
+        console.log('[Account] Token already exists, skipping:', existingByToken.email);
+        return existingByToken;
     }
 
     // 刷新 Token 并获取用户信息
