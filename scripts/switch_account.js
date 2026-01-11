@@ -180,6 +180,42 @@ async function inject() {
     log('✓ 数据库注入成功');
 }
 
+async function restoreState() {
+    const backupFile = path.join(os.homedir(), '.anti-quota', 'state_backup.json');
+    if (!fs.existsSync(backupFile)) {
+        log('没有找到备份文件，跳过恢复');
+        return;
+    }
+
+    log('正在强制恢复聊天状态...');
+    try {
+        const backupContent = fs.readFileSync(backupFile, 'utf-8');
+        const backupData = JSON.parse(backupContent);
+
+        const sqlParts = [];
+        for (const [key, value] of Object.entries(backupData)) {
+            // 注意：value 是 base64 字符串，需要转义单引号以防 SQL 注入（虽然备份文件是我们生成的）
+            const escapedValue = value.replace(/'/g, "''");
+            sqlParts.push(`INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('${key}', '${escapedValue}');`);
+            log(`- 准备恢复: ${key} (${value.length} 字节)`);
+        }
+
+        if (sqlParts.length > 0) {
+            const tmpSql = path.join(os.tmpdir(), `restore_${Date.now()}.sql`);
+            fs.writeFileSync(tmpSql, sqlParts.join('\n'));
+            execSync(`sqlite3 "${dbPath}" < "${tmpSql}"`);
+            fs.unlinkSync(tmpSql);
+            log(`✓ 成功恢复了 ${sqlParts.length} 个状态键`);
+        }
+
+        // 恢复成功后删除备份文件，防止重复恢复
+        // fs.unlinkSync(backupFile); 
+        // 先不要删，方便调试
+    } catch (e) {
+        log(`❌ 恢复状态失败: ${e.message}`);
+    }
+}
+
 // ============ 4. 终极启动逻辑 (异步 + 模拟用户) ============
 
 async function safeStart() {
@@ -240,6 +276,7 @@ async function main() {
         await killAntigravity();
         cleanLocksAndCache();
         await inject();
+        await restoreState();
 
         log('安静等待 1.5s 确保系统资源完全归位...');
         await new Promise(r => setTimeout(r, 1500));

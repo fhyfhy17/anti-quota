@@ -2,7 +2,7 @@
   "name": "anti-quota",
   "displayName": "Anti Quota",
   "description": "Antigravity 多账号配额管理 - 实时刷新、无感切换、自动切换",
-  "version": "2.8.11",
+  "version": "2.14.15",
   "publisher": "fhyfhy17",
   "icon": "resources/icon.png",
   "repository": {
@@ -62,6 +62,14 @@
       {
         "command": "anti-quota.checkAndSwitch",
         "title": "Anti Quota: 立即检查配额并切换"
+      },
+      {
+        "command": "anti-quota.showLogs",
+        "title": "Anti Quota: 显示输出日志"
+      },
+      {
+        "command": "anti-quota.testRestore",
+        "title": "Anti Quota: 测试恢复指令"
       }
     ],
     "viewsContainers": {
@@ -163,8 +171,5 @@
     "@types/vscode": "^1.80.0",
     "@vscode/vsce": "^2.22.0",
     "typescript": "^5.3.0"
-  },
-  "dependencies": {
-    "sql.js": "^1.13.0"
   }
 }

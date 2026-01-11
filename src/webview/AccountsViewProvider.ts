@@ -1041,6 +1041,17 @@ export class AccountsViewProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ type: 'exportAccounts' });
         }
 
+        function autoImport() {
+            // 虽然后端也会自动尝试，但这里给用户一个手动触发的机会
+            vscode.postMessage({ type: 'ready' }); // 重新发送 ready 触发同步
+        }
+
+        // 全局错误捕获，方便调试
+        window.onerror = function(msg, url, line, col, error) {
+            console.error('WebView Error:', msg, 'at', line, ':', col);
+            return false;
+        };
+
         function deleteAccount(id) {
             vscode.postMessage({ type: 'deleteAccount', accountId: id });
         }

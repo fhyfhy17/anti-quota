@@ -47,13 +47,24 @@ export class DirectSwitchService {
                 }
             }
 
-            // 2. 准备脚本路径
+
+            // 2. 获取当前会话ID
+            const chatSessionService = await import('./chatSessionService');
+            const activeSessionId = chatSessionService.getCurrentSessionIdFromDb();
+            this.log(`当前活跃会话 ID: ${activeSessionId || '未找到'}`);
+
+            // 2.1 标记切号
+            const antigravityService = await import('./antigravityService');
+            antigravityService.markSwitchPending(undefined, account.email, activeSessionId || undefined);
+            this.log('✓ 切号标记已设置');
+
+            // 3. 准备脚本路径
             const scriptPath = path.join(__dirname, '../../scripts/switch_account.js');
             if (!fs.existsSync(scriptPath)) {
                 throw new Error(`找不到切换脚本: ${scriptPath}`);
             }
 
-            // 3. 启动独立进程
+            // 4. 启动独立进程
             this.log('正在启动独立切换进程...');
             this.log(`Script: ${scriptPath}`);
 

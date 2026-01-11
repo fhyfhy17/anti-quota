@@ -12,14 +12,46 @@
 import * as vscode from 'vscode';
 import { AccountsViewProvider } from './webview/AccountsViewProvider';
 
+// 获取所有命令的辅助函数
+const getCommands = async () => {
+    return await vscode.commands.getCommands(true);
+};
+
 import * as accountService from './services/accountService';
 import * as multiWindowService from './services/multiWindowService';
 import { Account, DEFAULT_SETTINGS, ModelQuota } from './types/account';
+
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 // 状态
 let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
 let provider: AccountsViewProvider;
+
+const LOG_FILE = path.join(os.homedir(), '.anti-quota-extension.log');
+
+/** 记录日志到输出通道和文件 */
+function log(message: string) {
+    const timestamp = new Date().toISOString();
+    const formatted = `[${timestamp}] ${message}`;
+
+    // 输出到控制台
+    console.log(`[Anti Quota] ${message}`);
+
+    // 输出到 Output Channel (如果已创建)
+    if (outputChannel) {
+        outputChannel.appendLine(formatted);
+    }
+
+    // 输出到文件
+    try {
+        fs.appendFileSync(LOG_FILE, formatted + '\n');
+    } catch (e) {
+        // 忽略写入失败
+    }
+}
 
 // 定时器
 let quotaRefreshTimer: NodeJS.Timeout | undefined;
@@ -95,6 +127,26 @@ export async function activate(context: vscode.ExtensionContext) {
 // ============ 初始化 ============
 
 async function initialize() {
+    // ============ 调试：列出所有 Antigravity 命令 ============
+    getCommands().then(cmds => {
+        const relevant = cmds.filter(c => c.toLowerCase().includes('antigravity') || c.toLowerCase().includes('chat'));
+        log(`🔍 可用命令 (${relevant.length}):`);
+        relevant.forEach(c => log(`  - ${c}`));
+    });
+
+    // ============ 切号恢复检测（已禁用，待稳定后重新启用） ============
+    try {
+        log('切号恢复功能已禁用');
+        const antigravityService = await import('./services/antigravityService');
+        const switchPending = antigravityService.checkSwitchPending();
+        if (switchPending) {
+            antigravityService.clearSwitchPending();
+            log(`检测到切号标志 (${switchPending.toEmail || '未知'})，但恢复功能已禁用`);
+        }
+    } catch (e) {
+        // 忽略
+    }
+
     // 显示初始状态
     updateStatusBar();
 
@@ -266,6 +318,40 @@ function registerCommands(context: vscode.ExtensionContext) {
             const current = config.get<boolean>('autoSwitch.enabled', true);
             config.update('autoSwitch.enabled', !current, vscode.ConfigurationTarget.Global);
             vscode.window.showInformationMessage(`自动切换已${!current ? '启用' : '禁用'}`);
+        })
+    );
+
+    // 显示日志
+    context.subscriptions.push(
+        vscode.commands.registerCommand('anti-quota.showLogs', () => {
+            if (outputChannel) {
+                outputChannel.show();
+            } else {
+                vscode.window.showInformationMessage('日志通道尚未准备好');
+            }
+        })
+    );
+
+    // 测试恢复逻辑 (手动触发，方便调试)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('anti-quota.testRestore', async () => {
+            log('--- 手动触发测试恢复逻辑 ---');
+            const chatSessionService = await import('./services/chatSessionService');
+            const sessionId = chatSessionService.extractLatestSessionId();
+            if (!sessionId) {
+                vscode.window.showWarningMessage('未能在备份中找到会话 ID');
+                return;
+            }
+
+            log(`测试打开会话: ${sessionId}`);
+            try {
+                await vscode.commands.executeCommand('antigravity.setVisibleConversation', sessionId);
+                await vscode.commands.executeCommand('antigravity.prioritized.chat.open', { trajectoryId: sessionId });
+                await vscode.commands.executeCommand('antigravity.agentPanel.focus');
+                vscode.window.showInformationMessage('测试恢复指令已发送');
+            } catch (e) {
+                log(`测试恢复失败: ${e}`);
+            }
         })
     );
 
@@ -841,12 +927,8 @@ function getQuotaDetailsHtml(accounts: Account[], currentAccount: Account | null
 </html>`;
 }
 
-// ============ 工具函数 ============
+// 删除冗余的 log 函数，它已经在文件开头被重新定义
 
-function log(message: string) {
-    const timestamp = new Date().toLocaleTimeString();
-    outputChannel.appendLine(`[${timestamp}] ${message}`);
-}
 
 // ============ 停用 ============
 

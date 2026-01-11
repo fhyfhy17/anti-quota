@@ -1,12 +1,11 @@
 /**
- * Antigravity IDE 服务 (v11.0 - 终极物理同步版)
+ * Antigravity IDE 服务 (v12.0 - 精简版)
  */
 
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { execSync, spawn } from 'child_process';
-import initSqlJs from 'sql.js';
 
 // ============ 路径配置 ============
 
@@ -56,6 +55,69 @@ export function cleanUpLockFiles(): void {
             }
         }
     });
+}
+
+// ============ 切号标志管理 ============
+
+const SWITCH_FLAG_FILE = path.join(os.homedir(), '.anti-quota', 'switch_pending.json');
+
+interface SwitchPendingData {
+    timestamp: number;
+    fromEmail?: string;
+    toEmail?: string;
+    activeSessionId?: string; // 切号时正在进行的对话 ID
+}
+
+/** 标记切号操作（切号前调用） */
+export function markSwitchPending(fromEmail?: string, toEmail?: string, activeSessionId?: string): void {
+    try {
+        const backupDir = path.dirname(SWITCH_FLAG_FILE);
+        if (!fs.existsSync(backupDir)) {
+            fs.mkdirSync(backupDir, { recursive: true });
+        }
+        const data: SwitchPendingData = {
+            timestamp: Date.now(),
+            fromEmail,
+            toEmail,
+            activeSessionId
+        };
+        fs.writeFileSync(SWITCH_FLAG_FILE, JSON.stringify(data, null, 2), 'utf-8');
+        console.log('[Antigravity] Switch pending marked, activeSessionId:', activeSessionId || 'none');
+    } catch (e) {
+        console.error('[Antigravity] Failed to mark switch pending:', e);
+    }
+}
+
+/** 检查是否有待处理的切号操作（启动时调用） */
+export function checkSwitchPending(): SwitchPendingData | null {
+    if (!fs.existsSync(SWITCH_FLAG_FILE)) {
+        return null;
+    }
+    try {
+        const content = fs.readFileSync(SWITCH_FLAG_FILE, 'utf-8');
+        const data: SwitchPendingData = JSON.parse(content);
+        // 只有 5 分钟内的标志才有效（防止过期标志影响，给 IDE 重启留出时间）
+        if (Date.now() - data.timestamp < 300000) {
+            return data;
+        }
+        // 过期了，清除
+        clearSwitchPending();
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/** 清除切号标志 */
+export function clearSwitchPending(): void {
+    if (fs.existsSync(SWITCH_FLAG_FILE)) {
+        try {
+            fs.unlinkSync(SWITCH_FLAG_FILE);
+            console.log('[Antigravity] Switch pending cleared');
+        } catch (e) {
+            console.error('[Antigravity] Failed to clear switch pending:', e);
+        }
+    }
 }
 
 // ============ 应用控制 ============
@@ -231,66 +293,72 @@ function createOAuthField(accessToken: string, refreshToken: string, expiry: num
 
 export async function injectToken(accessToken: string, refreshToken: string, expiry: number, email?: string): Promise<void> {
     const dbPath = getDbPath();
-    const SQL = await initSqlJs({
-        locateFile: (file: string) => path.join(__dirname, '../../node_modules/sql.js/dist', file)
-    });
-
     if (!fs.existsSync(dbPath)) throw new Error('数据库不存在');
 
-    const fileBuffer = fs.readFileSync(dbPath);
-    const db = new SQL.Database(fileBuffer);
+    console.log('[Antigravity] Starting Nuclear Injection (CLI mode)...');
+    setDbFileWritable(true);
 
     try {
-        console.log('[Antigravity] Starting Nuclear Injection...');
-
-        // 1. 处理 jetskiStateSync (控制 AI 核心令牌)
+        // 1. 读取并更新 jetskiStateSync
         const jetskiKey = 'jetskiStateSync.agentManagerInitState';
-        const jetskiRes = db.exec(`SELECT value FROM ItemTable WHERE key = '${jetskiKey}'`);
-        if (jetskiRes.length && jetskiRes[0].values.length) {
-            // 这里我们保持原有的其他字段，只替换 OAuth field (field 6)
-            // 但为了保险，我们可以直接移除 key 再重新插入，或者使用我们的 Proto 工具
-            // 简化处理：直接更新
-            const currentValue = jetskiRes[0].values[0][0] as string;
+        const currentValue = execSync(
+            `sqlite3 "${dbPath}" "SELECT value FROM ItemTable WHERE key = '${jetskiKey}'"`,
+            { encoding: 'utf-8', timeout: 10000 }
+        ).trim();
+
+        if (currentValue) {
             const blob = Buffer.from(currentValue, 'base64');
-            const cleanData = removeField(blob, 6); // 借用之前的逻辑
+            const cleanData = removeField(blob, 6);
             const newField = createOAuthField(accessToken, refreshToken, expiry);
             const finalData = Buffer.concat([cleanData, newField]);
-            db.run(`UPDATE ItemTable SET value = ? WHERE key = ?`, [finalData.toString('base64'), jetskiKey]);
+            const newValue = finalData.toString('base64').replace(/'/g, "''");
+            execSync(
+                `sqlite3 "${dbPath}" "UPDATE ItemTable SET value = '${newValue}' WHERE key = '${jetskiKey}'"`,
+                { encoding: 'utf-8', timeout: 10000 }
+            );
+            console.log('[Antigravity] Updated jetskiStateSync');
         }
 
-        // 2. 处理 antigravityAuthStatus (控制 UI 身份和右上角显示)
+        // 2. 更新 antigravityAuthStatus
         if (email) {
             const authKey = 'antigravityAuthStatus';
-            const newAuth = {
+            const newAuth = JSON.stringify({
                 email: email,
                 apiKey: accessToken,
                 name: email.split('@')[0],
-                // 彻底删除 proto 缓存，强制 IDE 重新握手
-            };
-            db.run(`INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)`, [authKey, JSON.stringify(newAuth)]);
+            }).replace(/'/g, "''");
+            execSync(
+                `sqlite3 "${dbPath}" "INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('${authKey}', '${newAuth}')"`,
+                { encoding: 'utf-8', timeout: 10000 }
+            );
             console.log('[Antigravity] Written fresh antigravityAuthStatus');
         }
 
-        // 3. 抹杀所有可能导致“跳回”的缓存键
+        // 3. 删除缓存键
         const keysToDelete = [
             'google.geminicodeassist',
             'google.geminicodeassist.hasRunOnce',
             'geminiCodeAssist.chatThreads'
         ];
-        keysToDelete.forEach(k => {
-            db.run(`DELETE FROM ItemTable WHERE key = ? OR key LIKE ?`, [k, k + '.%']);
-        });
+        for (const k of keysToDelete) {
+            try {
+                execSync(
+                    `sqlite3 "${dbPath}" "DELETE FROM ItemTable WHERE key = '${k}' OR key LIKE '${k}.%'"`,
+                    { encoding: 'utf-8', timeout: 10000 }
+                );
+            } catch (e) { }
+        }
 
-        // 4. 重置 Onboarding (确保引导逻辑重新触发以加载状态)
-        db.run("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)", ['antigravityOnboarding', 'true']);
+        // 4. 重置 Onboarding
+        execSync(
+            `sqlite3 "${dbPath}" "INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('antigravityOnboarding', 'true')"`,
+            { encoding: 'utf-8', timeout: 10000 }
+        );
 
-        const data = db.export();
-        setDbFileWritable(true);
-        fs.writeFileSync(dbPath, Buffer.from(data));
         console.log('[Antigravity] Final DB written successfully');
-
-    } finally {
-        db.close();
+    } catch (error) {
+        console.error('[Antigravity] Injection failed:', error);
+        throw error;
     }
 }
 
@@ -337,20 +405,23 @@ function skipField(data: Buffer, offset: number, wireType: number): number {
 // ============ 暴露给外部的切换接口 ============
 
 export async function switchAccountSeamless(accessToken: string, refreshToken: string, expiry: number, email?: string): Promise<void> {
-    console.log('[Antigravity] === 触发终极无感切换 (V11) ===');
+    console.log('[Antigravity] === 触发无感切换 (V13.0 - 精简版) ===');
 
-    // 1. 预杀 (非强制，但增加成功率)
+    // 0. 标记切号操作
+    markSwitchPending(undefined, email);
+
+    // 1. 先杀进程（释放数据库锁）
+    console.log('[Antigravity] Step 1: 关闭 Antigravity...');
     nuclearKill();
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 1000));
 
-    // 2. 清理环境
+    // 2. 清理锁文件
     cleanUpLockFiles();
+    await new Promise(r => setTimeout(r, 200));
 
-    // 3. 物理注入
+    // 3. 注入新 Token
+    console.log('[Antigravity] Step 2: 注入新 Token...');
     await injectToken(accessToken, refreshToken, expiry, email);
-
-    // 4. 再次确保锁定
-    // 我们不再把文件锁死，因为我们要重启它
 
     console.log('[Antigravity] 注入完成，正在重启...');
     if (process.platform === 'darwin') {
