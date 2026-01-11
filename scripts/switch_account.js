@@ -1,14 +1,12 @@
 /**
  * 终极版账号切换脚本 v5 - 深度跨平台版本 (macOS + Windows)
- * 支持 Windows 自动下载 sqlite3.exe
+ * 已集成 Windows 版 sqlite3.exe
  */
 
 const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const https = require('https');
-const { createWriteStream } = require('fs');
 
 // ============ 平台检测 ============
 const platform = process.platform;
@@ -69,49 +67,7 @@ const windowsAppPaths = [
 log(`数据目录: ${userDataDir}`);
 log(`数据库路径: ${dbPath}`);
 
-// ============ 自动下载 SQLite3 工具 (仅 Windows) ============
-
-function downloadFile(url, dest) {
-    return new Promise((resolve, reject) => {
-        log(`正在下载: ${url}`);
-        const file = createWriteStream(dest);
-
-        const request = (urlStr) => {
-            https.get(urlStr, (response) => {
-                if (response.statusCode === 301 || response.statusCode === 302) {
-                    request(response.headers.location);
-                    return;
-                }
-                if (response.statusCode !== 200) {
-                    reject(new Error(`下载失败: HTTP ${response.statusCode}`));
-                    return;
-                }
-                response.pipe(file);
-                file.on('finish', () => {
-                    file.close();
-                    resolve();
-                });
-            }).on('error', (err) => {
-                fs.unlink(dest, () => { });
-                reject(err);
-            });
-        };
-        request(url);
-    });
-}
-
-function unzip(zipPath, destDir) {
-    return new Promise((resolve, reject) => {
-        try {
-            execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, {
-                timeout: 30000
-            });
-            resolve();
-        } catch (e) {
-            reject(e);
-        }
-    });
-}
+// ============ SQLite3 工具 (跨平台) ============
 
 async function ensureSqlite3() {
     if (!isWindows) {
@@ -123,50 +79,26 @@ async function ensureSqlite3() {
         }
     }
 
+    // Windows: 使用集成的 sqlite3.exe
+    const bundledPath = path.join(__dirname, 'sqlite3.exe');
+    if (fs.existsSync(bundledPath)) {
+        log(`✓ 使用内置 sqlite3.exe: ${bundledPath}`);
+        return bundledPath;
+    }
+
+    // 备选：查找用户目录
     if (fs.existsSync(sqlite3Path)) {
         try {
             execSync(`"${sqlite3Path}" --version`, { stdio: 'ignore', timeout: 3000 });
+            log(`✓ 使用用户目录下的 sqlite3.exe: ${sqlite3Path}`);
             return sqlite3Path;
         } catch (e) {
-            fs.unlinkSync(sqlite3Path);
+            log(`用户目录下的 sqlite3.exe (${sqlite3Path}) 已损坏或无法执行，将尝试其他方式。`);
+            fs.unlinkSync(sqlite3Path); // Remove corrupted one
         }
     }
 
-    log('首次运行，正在为 Windows 下载 sqlite3.exe (约 1MB)...');
-    const zipUrl = 'https://www.sqlite.org/2024/sqlite-tools-win-x64-3470000.zip';
-    const zipPath = path.join(antiQuotaDir, 'sqlite3.zip');
-    const extractDir = path.join(antiQuotaDir, 'sqlite3_temp');
-
-    try {
-        await downloadFile(zipUrl, zipPath);
-        if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
-        await unzip(zipPath, extractDir);
-
-        const files = fs.readdirSync(extractDir);
-        for (const file of files) {
-            const fullPath = path.join(extractDir, file);
-            if (fs.statSync(fullPath).isDirectory()) {
-                const exe = path.join(fullPath, 'sqlite3.exe');
-                if (fs.existsSync(exe)) {
-                    fs.copyFileSync(exe, sqlite3Path);
-                    break;
-                }
-            } else if (file === 'sqlite3.exe') {
-                fs.copyFileSync(fullPath, sqlite3Path);
-                break;
-            }
-        }
-
-        fs.unlinkSync(zipPath);
-        fs.rmSync(extractDir, { recursive: true, force: true });
-
-        if (!fs.existsSync(sqlite3Path)) throw new Error('解压后未找到 sqlite3.exe');
-        log('✓ sqlite3.exe 安装成功');
-        return sqlite3Path;
-    } catch (e) {
-        log(`❌ 自动下载 sqlite3 失败: ${e.message}`);
-        throw e;
-    }
+    throw new Error('未找到内置的 sqlite3.exe，请确保 scripts 目录下存在该文件');
 }
 
 // ============ 1. 彻底杀死 Antigravity (跨平台) ============
@@ -176,9 +108,9 @@ async function killAntigravity() {
 
     if (isWindows) {
         try {
-            // 使用 taskkill 强制结束进程树
-            execSync('taskkill /F /IM Antigravity.exe /T', { stdio: 'ignore', timeout: 5000 });
-            log('✓ taskkill 命令已执行');
+            // 重要：不要带 /T，否则会杀掉脚本自己（因为脚本是 Antigravity 的子进程）
+            execSync('taskkill /F /IM Antigravity.exe', { stdio: 'ignore', timeout: 5000 });
+            log('✓ taskkill 命令已执行 (仅匹配文件名)');
         } catch (e) { }
     } else {
         try {
@@ -192,7 +124,7 @@ async function killAntigravity() {
         } catch (e) { }
     }
 
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 2000));
     log('✓ 进程清理完成');
 }
 
@@ -319,8 +251,8 @@ INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('antigravityOnboarding', '
 
     try {
         if (isWindows) {
-            // Windows 下使用 .read 命令更加稳定
-            execSync(`"${sqlite3Cmd}" "${dbPath}" ".read '${tmpSql.replace(/\\/g, '/')}'"`, { shell: 'cmd.exe', timeout: 10000 });
+            // Windows 下使用命令行注入
+            execSync(`"${sqlite3Cmd}" "${dbPath}" ".read '${tmpSql.replace(/\\/g, '/')}'"`, { timeout: 10000 });
         } else {
             execSync(`${sqlite3Cmd} "${dbPath}" < "${tmpSql}"`, { timeout: 10000 });
         }
@@ -351,7 +283,7 @@ async function restoreState(sqlite3Cmd) {
             const tmpSql = path.join(os.tmpdir(), `restore_${Date.now()}.sql`);
             fs.writeFileSync(tmpSql, sqlParts.join('\n'));
             if (isWindows) {
-                execSync(`"${sqlite3Cmd}" "${dbPath}" ".read '${tmpSql.replace(/\\/g, '/')}'"`, { shell: 'cmd.exe', timeout: 10000 });
+                execSync(`"${sqlite3Cmd}" "${dbPath}" ".read '${tmpSql.replace(/\\/g, '/')}'"`, { timeout: 10000 });
             } else {
                 execSync(`${sqlite3Cmd} "${dbPath}" < "${tmpSql}"`, { timeout: 10000 });
             }
@@ -384,15 +316,18 @@ async function startAntigravity() {
         let launched = false;
         for (const appPath of windowsAppPaths) {
             if (fs.existsSync(appPath)) {
-                log(`通过路径启动: ${appPath}`);
-                spawn(appPath, [], { detached: true, stdio: 'ignore', shell: true }).unref();
+                log(`发现主程序: ${appPath}`);
+                // Windows 下使用 cmd /c start "title" "path" 是最稳妥的异步启动 GUI 方式
+                const cmd = `start "" "${appPath}"`;
+                execSync(cmd, { shell: 'cmd.exe' });
+                log(`✓ 已通过 start 命令拉起`);
                 launched = true;
                 break;
             }
         }
         if (!launched) {
-            log('未找到安装路径，尝试使用 start 命令...');
-            spawn('start', ['""', 'Antigravity'], { detached: true, stdio: 'ignore', shell: true }).unref();
+            log('尝试直接通过 shell 启动...');
+            spawn('Antigravity', [], { detached: true, stdio: 'ignore', shell: true }).unref();
         }
     } else {
         spawn('open', ['-a', 'Antigravity'], { detached: true, stdio: 'ignore' }).unref();
@@ -413,7 +348,7 @@ async function startAntigravity() {
             return;
         }
     }
-    log('警告: 应用未能在预期时间内响应，请检查运行状态。');
+    log('警告: 应用启动后未检测到生存，可能正在后台初始化。');
 }
 
 // ============ 主流程 ============
