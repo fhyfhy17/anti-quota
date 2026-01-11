@@ -1,19 +1,21 @@
 /**
- * 终极版账号切换脚本 v4 - 跨平台版本 (macOS + Windows)
- * 彻底解决环境干扰、单例锁、启动卡死问题
+ * 终极版账号切换脚本 v5 - 深度跨平台版本 (macOS + Windows)
+ * 支持 Windows 自动下载 sqlite3.exe
  */
 
 const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const https = require('https');
+const { createWriteStream } = require('fs');
 
 // ============ 平台检测 ============
-const platform = process.platform; // 'darwin' | 'win32' | 'linux'
+const platform = process.platform;
 const isWindows = platform === 'win32';
 const isMac = platform === 'darwin';
 
-// ============ 环境变量清理 (核心：断绝与旧进程的血缘关系) ============
+// ============ 环境变量清理 ============
 Object.keys(process.env).forEach(key => {
     if (key.startsWith('VSCODE_') || key.startsWith('ELECTRON_') || key.startsWith('ATOM_')) {
         delete process.env[key];
@@ -28,27 +30,34 @@ if (!isWindows) {
 // ============ 常量与配置 ============
 const [, , accessToken, refreshToken, expiryStr, email] = process.argv;
 const expiry = parseInt(expiryStr);
-const logFile = path.join(os.homedir(), '.anti_quota_debug.log');
+const homeDir = os.homedir();
+const antiQuotaDir = path.join(homeDir, '.anti-quota');
+const logFile = path.join(antiQuotaDir, 'switch_debug.log');
+
+// 确保目录存在
+if (!fs.existsSync(antiQuotaDir)) {
+    fs.mkdirSync(antiQuotaDir, { recursive: true });
+}
 
 function log(msg) {
     const time = new Date().toISOString();
     const line = `[${time}] ${msg}\n`;
-    fs.appendFileSync(logFile, line);
-    console.log(line);
+    try {
+        fs.appendFileSync(logFile, line);
+    } catch (e) { }
+    console.log(line.trim());
 }
 
-log(`\n\n========== 终极切换 v4 开始 [PID: ${process.pid}] [平台: ${platform}] ==========`);
+log(`\n\n========== 终极切换 v5 开始 [PID: ${process.pid}] [平台: ${platform}] ==========`);
 log(`目标: ${email}`);
 
 // ============ 0. 环境路径 (跨平台) ============
-const homeDir = os.homedir();
-
-// 根据平台设置路径
 const userDataDir = isWindows
     ? path.join(process.env.APPDATA || path.join(homeDir, 'AppData', 'Roaming'), 'Antigravity')
     : path.join(homeDir, 'Library/Application Support/Antigravity');
 
 const dbPath = path.join(userDataDir, 'User/globalStorage/state.vscdb');
+const sqlite3Path = path.join(antiQuotaDir, 'sqlite3.exe');
 
 // Windows 下可能的应用安装路径
 const windowsAppPaths = [
@@ -60,61 +69,139 @@ const windowsAppPaths = [
 log(`数据目录: ${userDataDir}`);
 log(`数据库路径: ${dbPath}`);
 
+// ============ 自动下载 SQLite3 工具 (仅 Windows) ============
+
+function downloadFile(url, dest) {
+    return new Promise((resolve, reject) => {
+        log(`正在下载: ${url}`);
+        const file = createWriteStream(dest);
+
+        const request = (urlStr) => {
+            https.get(urlStr, (response) => {
+                if (response.statusCode === 301 || response.statusCode === 302) {
+                    request(response.headers.location);
+                    return;
+                }
+                if (response.statusCode !== 200) {
+                    reject(new Error(`下载失败: HTTP ${response.statusCode}`));
+                    return;
+                }
+                response.pipe(file);
+                file.on('finish', () => {
+                    file.close();
+                    resolve();
+                });
+            }).on('error', (err) => {
+                fs.unlink(dest, () => { });
+                reject(err);
+            });
+        };
+        request(url);
+    });
+}
+
+function unzip(zipPath, destDir) {
+    return new Promise((resolve, reject) => {
+        try {
+            execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, {
+                timeout: 30000
+            });
+            resolve();
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
+async function ensureSqlite3() {
+    if (!isWindows) {
+        try {
+            execSync('sqlite3 --version', { stdio: 'ignore', timeout: 3000 });
+            return 'sqlite3';
+        } catch (e) {
+            throw new Error('sqlite3 未安装，请在 macOS 上运行: brew install sqlite3');
+        }
+    }
+
+    if (fs.existsSync(sqlite3Path)) {
+        try {
+            execSync(`"${sqlite3Path}" --version`, { stdio: 'ignore', timeout: 3000 });
+            return sqlite3Path;
+        } catch (e) {
+            fs.unlinkSync(sqlite3Path);
+        }
+    }
+
+    log('首次运行，正在为 Windows 下载 sqlite3.exe (约 1MB)...');
+    const zipUrl = 'https://www.sqlite.org/2024/sqlite-tools-win-x64-3470000.zip';
+    const zipPath = path.join(antiQuotaDir, 'sqlite3.zip');
+    const extractDir = path.join(antiQuotaDir, 'sqlite3_temp');
+
+    try {
+        await downloadFile(zipUrl, zipPath);
+        if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+        await unzip(zipPath, extractDir);
+
+        const files = fs.readdirSync(extractDir);
+        for (const file of files) {
+            const fullPath = path.join(extractDir, file);
+            if (fs.statSync(fullPath).isDirectory()) {
+                const exe = path.join(fullPath, 'sqlite3.exe');
+                if (fs.existsSync(exe)) {
+                    fs.copyFileSync(exe, sqlite3Path);
+                    break;
+                }
+            } else if (file === 'sqlite3.exe') {
+                fs.copyFileSync(fullPath, sqlite3Path);
+                break;
+            }
+        }
+
+        fs.unlinkSync(zipPath);
+        fs.rmSync(extractDir, { recursive: true, force: true });
+
+        if (!fs.existsSync(sqlite3Path)) throw new Error('解压后未找到 sqlite3.exe');
+        log('✓ sqlite3.exe 安装成功');
+        return sqlite3Path;
+    } catch (e) {
+        log(`❌ 自动下载 sqlite3 失败: ${e.message}`);
+        throw e;
+    }
+}
+
 // ============ 1. 彻底杀死 Antigravity (跨平台) ============
 
 async function killAntigravity() {
     log('正在清理旧进程...');
 
-    if (isMac) {
-        // macOS: 使用 AppleScript 优雅退出
+    if (isWindows) {
+        try {
+            // 使用 taskkill 强制结束进程树
+            execSync('taskkill /F /IM Antigravity.exe /T', { stdio: 'ignore', timeout: 5000 });
+            log('✓ taskkill 命令已执行');
+        } catch (e) { }
+    } else {
         try {
             execSync('osascript -e \'tell application "Antigravity" to quit\'', { timeout: 2000 });
         } catch (e) { }
 
         await new Promise(r => setTimeout(r, 1000));
 
-        // 强制杀死残留进程
         try {
             execSync(`pkill -9 -f "Antigravity.app"`, { stdio: 'ignore' });
         } catch (e) { }
-
-    } else if (isWindows) {
-        // Windows: 使用 taskkill
-        try {
-            // 先尝试优雅关闭
-            execSync('taskkill /IM Antigravity.exe', { stdio: 'ignore', timeout: 2000 });
-        } catch (e) { }
-
-        await new Promise(r => setTimeout(r, 1000));
-
-        // 强制杀死
-        try {
-            execSync('taskkill /F /IM Antigravity.exe', { stdio: 'ignore' });
-        } catch (e) { }
-
-    } else {
-        // Linux: 使用 pkill
-        try {
-            execSync('pkill -9 -f "Antigravity"', { stdio: 'ignore' });
-        } catch (e) { }
     }
 
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 1500));
     log('✓ 进程清理完成');
 }
 
-// ============ 2. 清理锁与缓存 (彻底断后) ============
+// ============ 2. 清理锁与缓存 ============
 
 function cleanLocksAndCache() {
-    log('正在清理锁文件与原子缓存...');
+    log('正在清理锁文件...');
 
-    // 清理所有可能的锁文件
-    const locks = [
-        'code.lock',
-        'SingletonLock',
-        'SingletonCookie',
-        'SingletonSocket'
-    ];
+    const locks = ['code.lock', 'SingletonLock', 'SingletonCookie', 'SingletonSocket'];
 
     locks.forEach(lock => {
         const p = path.join(userDataDir, lock);
@@ -129,15 +216,18 @@ function cleanLocksAndCache() {
     });
 
     // 清理数据库 WAL
-    ['wal', 'shm'].forEach(s => {
-        const p = dbPath + '-' + s;
+    ['-wal', '-shm'].forEach(suffix => {
+        const p = dbPath + suffix;
         if (fs.existsSync(p)) {
-            try { fs.unlinkSync(p); log(`✓ 已清理数据库锁: ${s}`); } catch (e) { }
+            try {
+                fs.unlinkSync(p);
+                log(`✓ 已清理数据库锁: ${suffix}`);
+            } catch (e) { }
         }
     });
 }
 
-// ============ 3. 数据库逻辑 (Protobuf) ============
+// ============ 3. Protobuf 编解码 ============
 
 function encodeVarint(value) {
     const buf = [];
@@ -197,24 +287,20 @@ function createOauthField(accessToken, refreshToken, expiry) {
     return Buffer.concat([encodeVarint((6 << 3) | 2), encodeVarint(oauthInfo.length), oauthInfo]);
 }
 
-// 获取 sqlite3 命令 (跨平台)
-function getSqliteCommand(dbPath, query) {
-    // Windows 可能需要完整路径或使用 PowerShell
-    // 假设 sqlite3 在 PATH 中，或者使用内置的方式
-    if (isWindows) {
-        // Windows 下使用双引号包裹路径，使用 type 重定向
-        return `sqlite3 "${dbPath}" "${query}"`;
-    }
-    return `sqlite3 "${dbPath}" "${query}"`;
-}
+// ============ 4. 数据库注入 ============
 
-async function inject() {
+async function injectToken(sqlite3Cmd) {
     log('正在注入 Token...');
-    let currentData;
+
+    if (!fs.existsSync(dbPath)) throw new Error(`数据库文件不存在: ${dbPath}`);
+
+    let currentData = '';
     try {
-        const cmd = getSqliteCommand(dbPath, "SELECT value FROM ItemTable WHERE key = 'jetskiStateSync.agentManagerInitState'");
-        currentData = execSync(cmd).toString().trim();
-    } catch (e) { currentData = ""; }
+        const getCmd = isWindows
+            ? `"${sqlite3Cmd}" "${dbPath}" "SELECT value FROM ItemTable WHERE key = 'jetskiStateSync.agentManagerInitState'"`
+            : `${sqlite3Cmd} "${dbPath}" "SELECT value FROM ItemTable WHERE key = 'jetskiStateSync.agentManagerInitState'"`;
+        currentData = execSync(getCmd, { encoding: 'utf-8', timeout: 10000 }).trim();
+    } catch (e) { }
 
     let finalB64;
     if (!currentData) {
@@ -225,53 +311,50 @@ async function inject() {
         finalB64 = finalData.toString('base64');
     }
 
-    const sql = `
-        INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('jetskiStateSync.agentManagerInitState', '${finalB64}');
-        INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('antigravityOnboarding', 'true');
-    `;
+    const sql = `INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('jetskiStateSync.agentManagerInitState', '${finalB64}');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('antigravityOnboarding', 'true');`;
+
     const tmpSql = path.join(os.tmpdir(), `switch_${Date.now()}.sql`);
     fs.writeFileSync(tmpSql, sql);
 
-    if (isWindows) {
-        // Windows: 使用 Get-Content 管道或直接 .read
-        execSync(`sqlite3 "${dbPath}" ".read '${tmpSql.replace(/\\/g, '/')}'"`, { shell: 'cmd.exe' });
-    } else {
-        execSync(`sqlite3 "${dbPath}" < "${tmpSql}"`);
+    try {
+        if (isWindows) {
+            // Windows 下使用 .read 命令更加稳定
+            execSync(`"${sqlite3Cmd}" "${dbPath}" ".read '${tmpSql.replace(/\\/g, '/')}'"`, { shell: 'cmd.exe', timeout: 10000 });
+        } else {
+            execSync(`${sqlite3Cmd} "${dbPath}" < "${tmpSql}"`, { timeout: 10000 });
+        }
+        log('✓ 数据库注入成功');
+    } finally {
+        try { fs.unlinkSync(tmpSql); } catch (e) { }
     }
-
-    fs.unlinkSync(tmpSql);
-    log('✓ 数据库注入成功');
 }
 
-async function restoreState() {
-    const backupFile = path.join(os.homedir(), '.anti-quota', 'state_backup.json');
-    if (!fs.existsSync(backupFile)) {
-        log('没有找到备份文件，跳过恢复');
-        return;
-    }
+// ============ 5. 恢复状态 (跨平台) ============
 
-    log('正在强制恢复聊天状态...');
+async function restoreState(sqlite3Cmd) {
+    const backupFile = path.join(antiQuotaDir, 'state_backup.json');
+    if (!fs.existsSync(backupFile)) return;
+
+    log('正在恢复聊天状态...');
     try {
         const backupContent = fs.readFileSync(backupFile, 'utf-8');
         const backupData = JSON.parse(backupContent);
 
         const sqlParts = [];
         for (const [key, value] of Object.entries(backupData)) {
-            const escapedValue = value.replace(/'/g, "''");
+            const escapedValue = (value + '').replace(/'/g, "''");
             sqlParts.push(`INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('${key}', '${escapedValue}');`);
-            log(`- 准备恢复: ${key} (${value.length} 字节)`);
         }
 
         if (sqlParts.length > 0) {
             const tmpSql = path.join(os.tmpdir(), `restore_${Date.now()}.sql`);
             fs.writeFileSync(tmpSql, sqlParts.join('\n'));
-
             if (isWindows) {
-                execSync(`sqlite3 "${dbPath}" ".read '${tmpSql.replace(/\\/g, '/')}'"`, { shell: 'cmd.exe' });
+                execSync(`"${sqlite3Cmd}" "${dbPath}" ".read '${tmpSql.replace(/\\/g, '/')}'"`, { shell: 'cmd.exe', timeout: 10000 });
             } else {
-                execSync(`sqlite3 "${dbPath}" < "${tmpSql}"`);
+                execSync(`${sqlite3Cmd} "${dbPath}" < "${tmpSql}"`, { timeout: 10000 });
             }
-
             fs.unlinkSync(tmpSql);
             log(`✓ 成功恢复了 ${sqlParts.length} 个状态键`);
         }
@@ -280,140 +363,82 @@ async function restoreState() {
     }
 }
 
-// ============ 4. 终极启动逻辑 (跨平台) ============
+// ============ 6. 启动应用 (跨平台) ============
 
-// 查找 Windows 应用路径
-function findWindowsAppPath() {
-    for (const appPath of windowsAppPaths) {
-        if (fs.existsSync(appPath)) {
-            log(`找到 Windows 应用: ${appPath}`);
-            return appPath;
-        }
-    }
-    log('警告: 未找到 Antigravity.exe，将尝试使用 start 命令');
-    return null;
-}
-
-// 检查进程是否存活 (跨平台)
 function isProcessAlive() {
     try {
-        if (isMac) {
-            const check = execSync('ps -ef | grep "/Applications/Antigravity.app/Contents/MacOS/Electron" | grep -v grep | grep -v "--type="', { encoding: 'utf-8' }).trim();
-            return !!check;
-        } else if (isWindows) {
+        if (isWindows) {
             const check = execSync('tasklist /FI "IMAGENAME eq Antigravity.exe" /NH', { encoding: 'utf-8' }).trim();
             return check.includes('Antigravity.exe');
         } else {
-            const check = execSync('pgrep -f "Antigravity"', { encoding: 'utf-8' }).trim();
+            const check = execSync('ps -ef | grep "/Applications/Antigravity.app/Contents/MacOS/Electron" | grep -v grep | grep -v "--type="', { encoding: 'utf-8' }).trim();
             return !!check;
         }
-    } catch (e) {
-        return false;
-    }
+    } catch (e) { return false; }
 }
 
-async function safeStart() {
-    log('执行拉起流程...');
+async function startAntigravity() {
+    log('正在尝试拉起 Antigravity...');
 
-    if (isMac) {
-        // macOS 启动逻辑
-        log('步骤 [1/3]: 异步 open 启动...');
-        const p1 = spawn('open', ['-a', 'Antigravity'], { detached: true, stdio: 'ignore' });
-        p1.unref();
-
-        await new Promise(r => setTimeout(r, 4000));
-
-        if (!isProcessAlive()) {
-            log('步骤 [2/3]: 再次尝试 open (冷启动)...');
-            spawn('open', ['/Applications/Antigravity.app'], { detached: true, stdio: 'ignore' }).unref();
-            await new Promise(r => setTimeout(r, 3000));
-        }
-
-        log('步骤 [3/3]: 执行 AppleScript 激活...');
-        try {
-            const p3 = spawn('osascript', ['-e', 'tell application "Antigravity" to activate'], { detached: true, stdio: 'ignore' });
-            p3.unref();
-            log('✓ 激活指令已发出');
-        } catch (e) {
-            log(`激活指令异常: ${e.message}`);
-        }
-
-    } else if (isWindows) {
-        // Windows 启动逻辑
-        const appPath = findWindowsAppPath();
-
-        log('步骤 [1/2]: 启动 Antigravity...');
-        if (appPath) {
-            // 使用完整路径启动
-            const p1 = spawn(appPath, [], {
-                detached: true,
-                stdio: 'ignore',
-                shell: true
-            });
-            p1.unref();
-        } else {
-            // 尝试使用 start 命令
-            try {
-                execSync('start "" "Antigravity"', { shell: 'cmd.exe', stdio: 'ignore' });
-            } catch (e) {
-                log(`start 命令失败: ${e.message}`);
-            }
-        }
-
-        await new Promise(r => setTimeout(r, 4000));
-
-        if (!isProcessAlive()) {
-            log('步骤 [2/2]: 再次尝试启动...');
-            if (appPath) {
+    if (isWindows) {
+        let launched = false;
+        for (const appPath of windowsAppPaths) {
+            if (fs.existsSync(appPath)) {
+                log(`通过路径启动: ${appPath}`);
                 spawn(appPath, [], { detached: true, stdio: 'ignore', shell: true }).unref();
+                launched = true;
+                break;
             }
-            await new Promise(r => setTimeout(r, 3000));
         }
-
+        if (!launched) {
+            log('未找到安装路径，尝试使用 start 命令...');
+            spawn('start', ['""', 'Antigravity'], { detached: true, stdio: 'ignore', shell: true }).unref();
+        }
     } else {
-        // Linux 启动逻辑
-        log('步骤 [1/1]: 启动 Antigravity...');
-        try {
-            spawn('antigravity', [], { detached: true, stdio: 'ignore' }).unref();
-        } catch (e) {
-            log(`Linux 启动失败: ${e.message}`);
+        spawn('open', ['-a', 'Antigravity'], { detached: true, stdio: 'ignore' }).unref();
+        await new Promise(r => setTimeout(r, 4000));
+        if (!isProcessAlive()) {
+            spawn('open', ['/Applications/Antigravity.app'], { detached: true, stdio: 'ignore' }).unref();
         }
+        try {
+            spawn('osascript', ['-e', 'tell application "Antigravity" to activate'], { detached: true, stdio: 'ignore' }).unref();
+        } catch (e) { }
     }
 
     // 生存确认
     for (let i = 1; i <= 3; i++) {
-        log(`生存检查 #${i}...`);
         await new Promise(r => setTimeout(r, 2000));
         if (isProcessAlive()) {
             log('✓✓✓ 确认主进程已在运行中！');
             return;
         }
     }
-
-    if (isWindows) {
-        log('警告: 应用未能在预期时间内拉起，请检查任务栏或手动启动 Antigravity。');
-    } else {
-        log('警告: 应用未能在预期时间内拉起，可能正在初始化，请观察 Dock 栏。');
-    }
+    log('警告: 应用未能在预期时间内响应，请检查运行状态。');
 }
 
-// ============ 5. 主流程 ============
+// ============ 主流程 ============
 
 async function main() {
     try {
+        if (!accessToken || !refreshToken) throw new Error('参数缺失');
+
+        const sqlite3Cmd = await ensureSqlite3();
+        log(`使用 sqlite3 指令: ${sqlite3Cmd}`);
+
         await killAntigravity();
         cleanLocksAndCache();
-        await inject();
-        await restoreState();
 
-        log('安静等待 1.5s 确保系统资源完全归位...');
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 1000));
+        await injectToken(sqlite3Cmd);
+        await restoreState(sqlite3Cmd);
 
-        await safeStart();
-        log('========== 终极切换任务完全结束！ ==========');
+        await new Promise(r => setTimeout(r, 1000));
+        await startAntigravity();
 
+        log('========== 终极切换 v5 完成！ ==========');
     } catch (e) {
         log(`\n!!! CRITICAL FAILURE !!!\n${e.message}\n${e.stack}`);
+        process.exit(1);
     }
 }
 

@@ -2,7 +2,7 @@
   "name": "anti-quota",
   "displayName": "Anti Quota",
   "description": "Antigravity 多账号配额管理 - 实时刷新、无感切换、自动切换",
-  "version": "2.14.17",
+  "version": "2.14.18",
   "publisher": "fhyfhy17",
   "icon": "resources/icon.png",
   "repository": {
