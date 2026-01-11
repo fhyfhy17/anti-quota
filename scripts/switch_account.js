@@ -47,13 +47,11 @@ async function killAntigravity() {
 
     await new Promise(r => setTimeout(r, 1000));
 
-    // 2. 暴力强杀所有相关进程
-    const killer = ['antigravity', 'Electron'];
-    killer.forEach(name => {
-        try {
-            execSync(`pkill -9 -i "${name}"`, { stdio: 'ignore' });
-        } catch (e) { }
-    });
+    // 2. 精确杀死 Antigravity 进程（不影响 VS Code 等其他 Electron 应用）
+    try {
+        // 只杀死 Antigravity.app 目录下的进程
+        execSync(`pkill -9 -f "Antigravity.app"`, { stdio: 'ignore' });
+    } catch (e) { }
 
     await new Promise(r => setTimeout(r, 1000));
     log('✓ 进程清理完成');
