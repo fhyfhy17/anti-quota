@@ -627,8 +627,9 @@ async function fetchProjectId(accessToken: string): Promise<string | null> {
 
         console.log(`[Quota] fetchProjectId response: status=${result.status}, data=${JSON.stringify(result.data)?.substring(0, 500)}`);
 
-        if (result.status === 200 && result.data?.cloudaicompanionProject) {
-            return result.data.cloudaicompanionProject;
+        if (result.status === 200) {
+            const projectId = result.data?.cloudaicompanionProject || result.data?.cloudaicompanion_project;
+            if (projectId) return projectId;
         }
 
         // 记录失败原因
@@ -663,7 +664,8 @@ export async function fetchAccountQuota(accountId: string): Promise<QuotaData> {
         }
     }
 
-    // 获取 Project ID，如果没有返回则使用默认值（家庭组等账号可能不返回 project ID）
+
+    // 获取 Project ID，如果没有返回则使用默认值
     const DEFAULT_PROJECT_ID = 'bamboo-precept-lgxtn';
     const projectId = await fetchProjectId(account.token.access_token) || DEFAULT_PROJECT_ID;
     console.log(`[Quota] ${account.email} using project ID: ${projectId}`);
